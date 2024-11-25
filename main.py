@@ -51,8 +51,8 @@ def init_db():
     c.execute('''
         CREATE TABLE IF NOT EXISTS warnings (
             user_id INTEGER PRIMARY KEY,
-            warnings INTEGER NOT NULL,
-            banned_until TEXT
+            warnings INTEGER NOT NULL DEFAULT 0,
+            banned_until INTEGER
         )
     ''')
     conn.commit()
@@ -75,15 +75,20 @@ def get_user_warnings(user_id):
 def update_warnings(user_id, warnings, banned_until):
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
-    c.execute('REPLACE INTO warnings (user_id, warnings, banned_until) VALUES (?, ?, ?)',
-              (user_id, warnings, banned_until))
+    c.execute('''
+        INSERT INTO warnings (user_id, warnings, banned_until) 
+        VALUES (?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET 
+            warnings=excluded.warnings,
+            banned_until=excluded.banned_until
+    ''', (user_id, warnings, banned_until))
     conn.commit()
     conn.close()
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
-    if not message:
-        return  # Ignore non-message updates
+    if not message or not message.text:
+        return  # Ignore non-text messages
 
     user = message.from_user
     chat = message.chat
@@ -102,23 +107,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     warnings, banned_until = get_user_warnings(user.id)
-    now = datetime.utcnow()
+    now = datetime.utcnow().timestamp()
 
     if banned_until:
-        try:
-            banned_until_dt = datetime.strptime(banned_until, '%Y-%m-%d %H:%M:%S')
-        except ValueError:
-            banned_until_dt = None
-
-        if banned_until_dt and now < banned_until_dt:
+        if now < banned_until:
             # User is currently banned; do not process further
+            logger.info(f"User {user.id} is currently banned until {datetime.fromtimestamp(banned_until)}.")
             return
         else:
             # Ban period has expired
-            update_warnings(user.id, warnings, None)
+            warnings = warnings  # Keep the warning count
+            banned_until = None
+            update_warnings(user.id, warnings, banned_until)
 
     if is_arabic(message.text):
         warnings += 1
+        logger.info(f"User {user.id} has {warnings} warning(s).")
         if warnings == 1:
             ban_duration = timedelta(days=1)
             reason = "1- Primary warning sent to the student and he/she will be banned from sending messages for ONE DAY."
@@ -130,8 +134,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reason = "3- Third warning sent to the student and he/she will be banned from sending messages and may be addressed to DISCIPLINARY COMMITTEE."
 
         if ban_duration:
-            banned_until = now + ban_duration
-            update_warnings(user.id, warnings, banned_until.strftime('%Y-%m-%d %H:%M:%S'))
+            banned_until = int((datetime.utcnow() + ban_duration).timestamp())
+            update_warnings(user.id, warnings, banned_until)
             try:
                 # Ensure the chat is a supergroup before restricting
                 if chat.type == 'supergroup':
@@ -139,8 +143,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         chat_id=chat.id,
                         user_id=user.id,
                         permissions=ChatPermissions(can_send_messages=False),
-                        until_date=int(banned_until.timestamp())
+                        until_date=banned_until
                     )
+                    logger.info(f"User {user.id} has been restricted until {datetime.fromtimestamp(banned_until)}.")
                 else:
                     logger.error("Cannot restrict members in a regular group. Please convert the group to a supergroup.")
             except BadRequest as e:
@@ -151,6 +156,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             update_warnings(user.id, warnings, None)
             try:
                 await context.bot.ban_chat_member(chat_id=chat.id, user_id=user.id)
+                logger.info(f"User {user.id} has been banned permanently.")
             except BadRequest as e:
                 logger.error(f"BadRequest Error banning user: {e}")
             except Exception as e:
@@ -164,6 +170,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=alarm_message,
                 parse_mode='Markdown'
             )
+            logger.info(f"Alarm message sent to user {user.id}.")
         except Forbidden:
             logger.error("Cannot send private message to the user. They might not have started a conversation with the bot.")
             # Send a message in the group notifying the user to start a private chat
@@ -173,6 +180,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     chat_id=chat.id,
                     text=notification
                 )
+                logger.info(f"Notification sent in group for user {user.id}.")
             except Exception as e:
                 logger.error(f"Error sending notification in group: {e}")
         except Exception as e:
