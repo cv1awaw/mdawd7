@@ -2,6 +2,7 @@
 import os
 import re
 import sqlite3
+import logging
 from datetime import datetime, timedelta
 from telegram import Update, ChatPermissions
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters
@@ -29,6 +30,13 @@ SEVEN DAYS.
 3- Third warning sent to the student and he/she will be banned from sending messages and  
 May be addressed to DISCIPLINARY COMMITTEE.
 """
+
+# Configure logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 def init_db():
     conn = sqlite3.connect(DATABASE)
@@ -81,8 +89,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if now < banned_until_dt:
             try:
                 await context.bot.delete_message(chat_id=chat.id, message_id=message.message_id)
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"Error deleting message: {e}")
             return
         else:
             update_warnings(user.id, warnings, None)
@@ -110,7 +118,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             update_warnings(user.id, warnings, None)
-            await context.bot.kick_chat_member(chat_id=chat.id, user_id=user.id)
+            await context.bot.ban_chat_member(chat_id=chat.id, user_id=user.id)
 
         # Send private message with regulations
         try:
@@ -120,14 +128,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=alarm_message,
                 parse_mode='Markdown'
             )
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Error sending private message: {e}")
 
         # Delete the offending message
         try:
             await context.bot.delete_message(chat_id=chat.id, message_id=message.message_id)
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Error deleting message: {e}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Bot is running.")
@@ -135,6 +143,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     init_db()
     TOKEN = os.getenv('BOT_TOKEN')
+    if not TOKEN:
+        logger.error("BOT_TOKEN is not set.")
+        return
+
     application = ApplicationBuilder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
