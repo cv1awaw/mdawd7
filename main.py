@@ -12,6 +12,7 @@ from telegram.ext import (
     CommandHandler,
     filters,
 )
+from telegram.error import Forbidden, BadRequest
 
 DATABASE = 'warnings.db'
 ADMIN_IDS = []  # Add your admin user IDs here
@@ -81,6 +82,9 @@ def update_warnings(user_id, warnings, banned_until):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
+    if not message:
+        return  # Ignore non-message updates
+
     user = message.from_user
     chat = message.chat
 
@@ -107,8 +111,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             banned_until_dt = None
 
         if banned_until_dt and now < banned_until_dt:
+            # User is currently banned; do not process further
             return
         else:
+            # Ban period has expired
             update_warnings(user.id, warnings, None)
 
     if is_arabic(message.text):
@@ -127,18 +133,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             banned_until = now + ban_duration
             update_warnings(user.id, warnings, banned_until.strftime('%Y-%m-%d %H:%M:%S'))
             try:
-                await context.bot.restrict_chat_member(
-                    chat_id=chat.id,
-                    user_id=user.id,
-                    permissions=ChatPermissions(can_send_messages=False),
-                    until_date=int(banned_until.timestamp())
-                )
+                # Ensure the chat is a supergroup before restricting
+                if chat.type == 'supergroup':
+                    await context.bot.restrict_chat_member(
+                        chat_id=chat.id,
+                        user_id=user.id,
+                        permissions=ChatPermissions(can_send_messages=False),
+                        until_date=int(banned_until.timestamp())
+                    )
+                else:
+                    logger.error("Cannot restrict members in a regular group. Please convert the group to a supergroup.")
+            except BadRequest as e:
+                logger.error(f"BadRequest Error restricting user: {e}")
             except Exception as e:
                 logger.error(f"Error restricting user: {e}")
         else:
             update_warnings(user.id, warnings, None)
             try:
                 await context.bot.ban_chat_member(chat_id=chat.id, user_id=user.id)
+            except BadRequest as e:
+                logger.error(f"BadRequest Error banning user: {e}")
             except Exception as e:
                 logger.error(f"Error banning user: {e}")
 
@@ -150,15 +164,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=alarm_message,
                 parse_mode='Markdown'
             )
+        except Forbidden:
+            logger.error("Cannot send private message to the user. They might not have started a conversation with the bot.")
+            # Optionally, send a message in the group notifying the user to start a private chat
+            try:
+                notification = f"{user.first_name}, please start a private chat with me to receive warnings and regulations."
+                await context.bot.send_message(
+                    chat_id=chat.id,
+                    text=notification
+                )
+            except Exception as e:
+                logger.error(f"Error sending notification in group: {e}")
         except Exception as e:
             logger.error(f"Error sending private message: {e}")
 
         # Removed message deletion to prevent deleting the user's message
-        # If you need to keep message deletion, you can uncomment the following lines
-        # try:
-        #     await context.bot.delete_message(chat_id=chat.id, message_id=message.message_id)
-        # except Exception as e:
-        #     logger.error(f"Error deleting message: {e}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Bot is running.")
