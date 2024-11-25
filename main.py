@@ -1,4 +1,3 @@
-# main.py
 import os
 import re
 import sqlite3
@@ -150,7 +149,43 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"Alarm message sent to user {user.id}.")
         except Forbidden:
             logger.error("Cannot send private message to the user. They might not have started a conversation with the bot.")
-            # Optionally, notify in the group that the user hasn't started a conversation
+            
+            # **New Code: Notify admins that the user hasn't started the bot**
+            admin_ids = load_admin_ids()
+            if admin_ids:
+                username = f"@{user.username}" if user.username else "NoUsername"
+                notification_message = (
+                    f"⚠️ **Notification:**\n"
+                    f"**User ID:** {user.id}\n"
+                    f"**Username:** {username}\n"
+                    f"**Issue:** The user has triggered a warning but hasn't started a private conversation with the bot.\n"
+                    f"**Action Needed:** Please reach out to the user to ensure they start a conversation with the bot to receive warnings."
+                )
+                for admin_id in admin_ids:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=admin_id,
+                            text=notification_message,
+                            parse_mode='Markdown'
+                        )
+                        logger.info(f"Notification sent to admin {admin_id} about user {user.id} not starting the bot.")
+                    except Forbidden:
+                        logger.error(f"Cannot send notification to admin ID {admin_id}. They might have blocked the bot.")
+                    except Exception as e:
+                        logger.error(f"Error sending notification to admin ID {admin_id}: {e}")
+            else:
+                logger.warning("No admin IDs found in Tara_access.txt to notify about the user not starting the bot.")
+            
+            # Optionally, you can notify the group that the user hasn't started the bot
+            # Uncomment the following lines if you want to notify the group as well
+            # try:
+            #     await message.reply_text(
+            #         f"⚠️ {user.mention_html()} has triggered a warning but hasn't started a private conversation with the bot. Please ensure they are aware of this requirement.",
+            #         parse_mode='HTML'
+            #     )
+            # except Exception as e:
+            #     logger.error(f"Error notifying group about user {user.id}: {e}")
+
         except Exception as e:
             logger.error(f"Error sending private message: {e}")
 
