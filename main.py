@@ -107,10 +107,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             banned_until_dt = None
 
         if banned_until_dt and now < banned_until_dt:
-            try:
-                await context.bot.delete_message(chat_id=chat.id, message_id=message.message_id)
-            except Exception as e:
-                logger.error(f"Error deleting message: {e}")
             return
         else:
             update_warnings(user.id, warnings, None)
@@ -157,11 +153,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Error sending private message: {e}")
 
-        # Delete the offending message
-        try:
-            await context.bot.delete_message(chat_id=chat.id, message_id=message.message_id)
-        except Exception as e:
-            logger.error(f"Error deleting message: {e}")
+        # Removed message deletion to prevent deleting the user's message
+        # If you need to keep message deletion, you can uncomment the following lines
+        # try:
+        #     await context.bot.delete_message(chat_id=chat.id, message_id=message.message_id)
+        # except Exception as e:
+        #     logger.error(f"Error deleting message: {e}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Bot is running.")
