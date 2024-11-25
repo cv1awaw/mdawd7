@@ -14,7 +14,7 @@ from telegram.ext import (
 )
 
 DATABASE = 'warnings.db'
-ADMIN_IDS = []  # Add your admin user IDs here
+ADMIN_IDS = [6177929931]  # Add your admin user IDs here
 
 REGULATIONS_MESSAGE = """
 **Communication Channels Regulation**
@@ -161,7 +161,7 @@ def main():
 
     # Ensure the token does not have the 'bot=' prefix
     if TOKEN.lower().startswith('bot='):
-        TOKEN = TOKEN[4:].strip()
+        TOKEN = TOKEN.replace('bot=', '').strip()
         logger.warning("BOT_TOKEN should not include 'bot=' prefix. Stripping it.")
 
     application = ApplicationBuilder().token(TOKEN).build()
