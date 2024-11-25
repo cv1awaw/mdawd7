@@ -5,7 +5,13 @@ import sqlite3
 import logging
 from datetime import datetime, timedelta
 from telegram import Update, ChatPermissions
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters
+from telegram.ext import (
+    ApplicationBuilder,
+    ContextTypes,
+    MessageHandler,
+    CommandHandler,
+    filters,
+)
 
 DATABASE = 'warnings.db'
 ADMIN_IDS = []  # Add your admin user IDs here
@@ -150,9 +156,13 @@ def main():
     if not TOKEN:
         logger.error("BOT_TOKEN is not set.")
         return
+
     TOKEN = TOKEN.strip()
-    if TOKEN.startswith('bot='):
+
+    # Ensure the token does not have the 'bot=' prefix
+    if TOKEN.lower().startswith('bot='):
         TOKEN = TOKEN[4:].strip()
+        logger.warning("BOT_TOKEN should not include 'bot=' prefix. Stripping it.")
 
     application = ApplicationBuilder().token(TOKEN).build()
 
