@@ -87,6 +87,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat.type not in ['group', 'supergroup']:
         return
 
+    # Check if the bot is an admin in the chat
+    try:
+        bot_member = await context.bot.get_chat_member(chat.id, context.bot.id)
+        if bot_member.status not in ['administrator', 'creator']:
+            logger.info("Bot is not an admin in the chat.")
+            return
+    except Exception as e:
+        logger.error(f"Error checking bot admin status: {e}")
+        return
+
     warnings, banned_until = get_user_warnings(user.id)
     now = datetime.utcnow()
 
@@ -120,15 +130,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if ban_duration:
             banned_until = now + ban_duration
             update_warnings(user.id, warnings, banned_until.strftime('%Y-%m-%d %H:%M:%S'))
-            await context.bot.restrict_chat_member(
-                chat_id=chat.id,
-                user_id=user.id,
-                permissions=ChatPermissions(can_send_messages=False),
-                until_date=int(banned_until.timestamp())
-            )
+            try:
+                await context.bot.restrict_chat_member(
+                    chat_id=chat.id,
+                    user_id=user.id,
+                    permissions=ChatPermissions(can_send_messages=False),
+                    until_date=int(banned_until.timestamp())
+                )
+            except Exception as e:
+                logger.error(f"Error restricting user: {e}")
         else:
             update_warnings(user.id, warnings, None)
-            await context.bot.ban_chat_member(chat_id=chat.id, user_id=user.id)
+            try:
+                await context.bot.ban_chat_member(chat_id=chat.id, user_id=user.id)
+            except Exception as e:
+                logger.error(f"Error banning user: {e}")
 
         # Send private message with regulations
         try:
