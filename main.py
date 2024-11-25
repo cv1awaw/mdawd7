@@ -1,7 +1,7 @@
 # main.py
 import os
 import re
-import sqlite3
+import aiosqlite
 import logging
 from datetime import datetime
 from telegram import Update
@@ -45,43 +45,37 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def init_db():
-    conn = sqlite3.connect(DATABASE)
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS warnings (
-            user_id INTEGER PRIMARY KEY,
-            warnings INTEGER NOT NULL DEFAULT 0
-        )
-    ''')
-    conn.commit()
-    conn.close()
+async def init_db():
+    async with aiosqlite.connect(DATABASE) as db:
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS warnings (
+                user_id INTEGER PRIMARY KEY,
+                warnings INTEGER NOT NULL DEFAULT 0
+            )
+        ''')
+        await db.commit()
 
 def is_arabic(text):
     return bool(re.search(r'[\u0600-\u06FF]', text))
 
-def get_user_warnings(user_id):
-    conn = sqlite3.connect(DATABASE)
-    c = conn.cursor()
-    c.execute('SELECT warnings FROM warnings WHERE user_id = ?', (user_id,))
-    row = c.fetchone()
-    conn.close()
-    if row:
-        (warnings,) = row
-        return warnings
-    return 0
+async def get_user_warnings(user_id):
+    async with aiosqlite.connect(DATABASE) as db:
+        async with db.execute('SELECT warnings FROM warnings WHERE user_id = ?', (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                (warnings,) = row
+                return warnings
+            return 0
 
-def update_warnings(user_id, warnings):
-    conn = sqlite3.connect(DATABASE)
-    c = conn.cursor()
-    c.execute('''
-        INSERT INTO warnings (user_id, warnings) 
-        VALUES (?, ?)
-        ON CONFLICT(user_id) DO UPDATE SET 
-            warnings=excluded.warnings
-    ''', (user_id, warnings))
-    conn.commit()
-    conn.close()
+async def update_warnings(user_id, warnings):
+    async with aiosqlite.connect(DATABASE) as db:
+        await db.execute('''
+            INSERT INTO warnings (user_id, warnings) 
+            VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET 
+                warnings=excluded.warnings
+        ''', (user_id, warnings))
+        await db.commit()
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
@@ -105,7 +99,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if is_arabic(message.text):
-        warnings = get_user_warnings(user.id) + 1
+        warnings = await get_user_warnings(user.id) + 1
         logger.info(f"User {user.id} has {warnings} warning(s).")
 
         if warnings == 1:
@@ -115,7 +109,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             reason = "3- Third warning sent to the student. May be addressed to DISCIPLINARY COMMITTEE."
 
-        update_warnings(user.id, warnings)
+        await update_warnings(user.id, warnings)
 
         # Send private message with regulations
         try:
@@ -128,7 +122,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"Alarm message sent to user {user.id}.")
         except Forbidden:
             logger.error("Cannot send private message to the user. They might not have started a conversation with the bot.")
-            # Optionally, send a message in the group notifying the user to start a private chat
+            # Send a message in the group notifying the user to start a private chat
             try:
                 notification = f"{user.first_name}, please start a private chat with me to receive warnings and regulations."
                 await context.bot.send_message(
@@ -147,7 +141,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Bot is running.")
 
 def main():
-    init_db()
+    import asyncio
+    asyncio.run(init_db())
     TOKEN = os.getenv('BOT_TOKEN')
     if not TOKEN:
         logger.error("BOT_TOKEN is not set.")
