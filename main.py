@@ -15,7 +15,7 @@ from telegram.ext import (
 from telegram.error import Forbidden, BadRequest
 
 DATABASE = 'warnings.db'
-ADMIN_IDS = []  # Add your admin user IDs here
+ADMIN_IDS = []  # Not used anymore since we load from Tara_access.txt
 
 REGULATIONS_MESSAGE = """
 **Communication Channels Regulation**
@@ -80,6 +80,18 @@ def update_warnings(user_id, warnings):
     conn.commit()
     conn.close()
 
+def load_admin_ids():
+    try:
+        with open('Tara_access.txt', 'r') as file:
+            admin_ids = [int(line.strip()) for line in file if line.strip().isdigit()]
+        return admin_ids
+    except FileNotFoundError:
+        logger.error("Tara_access.txt not found! Please create the file and add admin Telegram user IDs.")
+        return []
+    except ValueError as e:
+        logger.error(f"Error parsing admin IDs: {e}")
+        return []
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message or not message.text:
@@ -125,11 +137,39 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"Alarm message sent to user {user.id}.")
         except Forbidden:
             logger.error("Cannot send private message to the user. They might not have started a conversation with the bot.")
-            # Removed the group notification as per your request
+            # Optionally, notify in the group that the user hasn't started a conversation
         except Exception as e:
             logger.error(f"Error sending private message: {e}")
 
-        # Removed message deletion to prevent deleting the user's message
+        # Notify admins about the number of alarms
+        admin_ids = load_admin_ids()
+        if not admin_ids:
+            logger.warning("No admin IDs found in Tara_access.txt.")
+            return
+
+        # Construct the alarm report message
+        username = f"@{user.username}" if user.username else "NoUsername"
+        alarm_report = (
+            f"**Alarm Report**\n"
+            f"**Student ID:** {user.id}\n"
+            f"**Username:** {username}\n"
+            f"**Number of Alarms:** {warnings}"
+        )
+
+        for admin_id in admin_ids:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=alarm_report,
+                    parse_mode='Markdown'
+                )
+                logger.info(f"Alarm report sent to admin {admin_id}.")
+            except Forbidden:
+                logger.error(f"Cannot send message to admin ID {admin_id}. They might have blocked the bot.")
+            except Exception as e:
+                logger.error(f"Error sending message to admin ID {admin_id}: {e}")
+
+        # Optionally, you can log this event or save it to a file for auditing
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Bot is running.")
