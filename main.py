@@ -1,128 +1,149 @@
+# main.py
 import os
-import datetime
-from flask import Flask, request
-from telegram import Bot, Update, ChatPermissions
-from telegram.ext import Dispatcher, MessageHandler, Filters
-from sqlalchemy import create_engine, Column, Integer, DateTime
-from sqlalchemy.orm import sessionmaker, declarative_base
+import re
+import sqlite3
+from datetime import datetime, timedelta
+from telegram import Update, ChatPermissions
+from telegram.ext import Updater, MessageHandler, Filters, CallbackContext, CommandHandler
 
-app = Flask(name)
+DATABASE = 'warnings.db'
+ADMIN_IDS = []  # Add your admin user IDs here
 
-# Get the bot token from environment variables
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
+REGULATIONS_MESSAGE = """
+**Communication Channels Regulation**
 
-if not BOT_TOKEN:
-    raise ValueError("No BOT_TOKEN provided. Set the BOT_TOKEN environment variable.")
+The Official Groups and channels have been created to facilitate the communication between the  
+students and the officials, therefore we hereby list the regulation for the groups: 
+• The official language of the group is **ENGLISH ONLY**  
+• Avoid any side discussion by any means. 
+• When having a general request or question it should be sent to the group and the student  
+should tag the related official (TARA or other officials). 
+• The messages should be sent in the official working hours (8:00 AM to 5:00 PM) and only  
+important questions and inquiries should be sent after the mentioned time.
 
-bot = Bot(token=BOT_TOKEN)
+Please note that not complying with the above-mentioned regulation will result in: 
+1- Primary warning sent to the student and he/she will be banned from sending messages for  
+ONE DAY. 
+2- Second warning sent to the student and he/she will be banned from sending messages for  
+SEVEN DAYS. 
+3- Third warning sent to the student and he/she will be banned from sending messages and  
+May be addressed to DISCIPLINARY COMMITTEE.
+"""
 
-# Set up the dispatcher for handling updates
-dispatcher = Dispatcher(bot=bot, update_queue=None, workers=0)
+def init_db():
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS warnings (
+            user_id INTEGER PRIMARY KEY,
+            warnings INTEGER NOT NULL,
+            banned_until TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
 
-# Database setup
-engine = create_engine('sqlite:///warnings.db', connect_args={'check_same_thread': False})
-Session = sessionmaker(bind=engine)
-session = Session()
-Base = declarative_base()
+def is_arabic(text):
+    return bool(re.search(r'[\u0600-\u06FF]', text))
 
-class UserWarning(Base):
-    tablename = 'user_warnings'
-    user_id = Column(Integer, primary_key=True)
-    warning_count = Column(Integer, default=0)
-    mute_until = Column(DateTime, nullable=True)
+def get_user_warnings(user_id):
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute('SELECT warnings, banned_until FROM warnings WHERE user_id = ?', (user_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        warnings, banned_until = row
+        return warnings, banned_until
+    return 0, None
 
-Base.metadata.create_all(engine)
+def update_warnings(user_id, warnings, banned_until):
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute('REPLACE INTO warnings (user_id, warnings, banned_until) VALUES (?, ?, ?)',
+              (user_id, warnings, banned_until))
+    conn.commit()
+    conn.close()
 
-# Function to detect Arabic messages
-def detect_arabic(update, context):
-    message = update.effective_message
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
+def handle_message(update: Update, context: CallbackContext):
+    message = update.message
+    user = message.from_user
+    chat = message.chat
 
-    if message.text:
-        # Check if the message contains Arabic characters
-        if any('\u0600' <= c <= '\u06FF' or '\u0750' <= c <= '\u077F' or '\u08A0' <= c <= '\u08FF' for c in message.text):
-            # Fetch or create a user warning record
-            user_warning = session.query(UserWarning).filter_by(user_id=user_id).first()
-            if not user_warning:
-                user_warning = UserWarning(user_id=user_id)
-                session.add(user_warning)
+    if chat.type not in ['group', 'supergroup']:
+        return
 
-            # Check if user is currently muted
-            now = datetime.datetime.utcnow()
-            if user_warning.mute_until and user_warning.mute_until > now:
-                # User is muted, delete their message
-                message.delete()
-                return
+    warnings, banned_until = get_user_warnings(user.id)
+    now = datetime.utcnow()
 
-            # Increment warning count
-            user_warning.warning_count += 1
+    if banned_until:
+        banned_until_dt = datetime.strptime(banned_until, '%Y-%m-%d %H:%M:%S')
+        if now < banned_until_dt:
+            try:
+                context.bot.delete_message(chat_id=chat.id, message_id=message.message_id)
+            except:
+                pass
+            return
+        else:
+            update_warnings(user.id, warnings, None)
 
-            # Determine mute duration based on warning count
-            if user_warning.warning_count == 1:
-                mute_duration = datetime.timedelta(days=1)
-                ban_message = (
-                    "1- Primary warning sent to the student and he/she will be banned from sending messages for ONE DAY."
-                )
-            elif user_warning.warning_count == 2:
-                mute_duration = datetime.timedelta(days=7)
-                ban_message = (
-                    "2- Second warning sent to the student and he/she will be banned from sending messages for SEVEN DAYS."
-                )
-            else:
-                mute_duration = None  # Indefinite mute
-                ban_message = (
-                    "3- Third warning sent to the student and he/she will be banned from sending messages and may be addressed to DISCIPLINARY COMMITTEE."
-                )
+    if is_arabic(message.text):
+        warnings += 1
+        if warnings == 1:
+            ban_duration = timedelta(days=1)
+            reason = "1- Primary warning sent to the student and he/she will be banned from sending messages for ONE DAY."
+        elif warnings == 2:
+            ban_duration = timedelta(days=7)
+            reason = "2- Second warning sent to the student and he/she will be banned from sending messages for SEVEN DAYS."
+        else:
+            ban_duration = None
+            reason = "3- Third warning sent to the student and he/she will be banned from sending messages and may be addressed to DISCIPLINARY COMMITTEE."
 
-            # Set mute_until time
-            if mute_duration:
-                user_warning.mute_until = now + mute_duration
-            else:
-                user_warning.mute_until = datetime.datetime.max  # Indefinite mute
-
-            session.commit()
-
-            # Mute the user in the group
-            permissions = ChatPermissions(can_send_messages=False)
-            bot.restrict_chat_member(
-                chat_id=chat_id,
-                user_id=user_id,
-                permissions=permissions,
-                until_date=user_warning.mute_until
+        if ban_duration:
+            banned_until = now + ban_duration
+            update_warnings(user.id, warnings, banned_until.strftime('%Y-%m-%d %H:%M:%S'))
+            until_timestamp = int(banned_until.timestamp())
+            context.bot.restrict_chat_member(
+                chat_id=chat.id,
+                user_id=user.id,
+                permissions=ChatPermissions(can_send_messages=False),
+                until_date=until_timestamp
             )
+        else:
+            update_warnings(user.id, warnings, None)
+            context.bot.kick_chat_member(chat_id=chat.id, user_id=user.id)
 
-            # Send private warning message to the user
-            warning_text = (
-                "Communication Channels Regulation\n"
-                "The Official Groups and channels have been created to facilitate the communication between the students and the officials, therefore we hereby list the regulation for the groups:\n"
-"• The official language of the group is ENGLISH ONLY\n"
-                "• Avoid any side discussion by any means.\n"
-                "• When having a general request or question it should be sent to the group and the student should tag the related official (TARA or other officials).\n"
-                "• The messages should be sent in the official working hours (8:00 AM to 5:00 PM) and only important questions and inquiries should be sent after the mentioned time.\n\n"
-                "Please note that not complying with the above-mentioned regulation will result in:\n"
-                f"{ban_message}"
+        # Send private message with regulations
+        try:
+            alarm_message = f"{REGULATIONS_MESSAGE}\n\n{reason}"
+            context.bot.send_message(
+                chat_id=user.id,
+                text=alarm_message,
+                parse_mode='Markdown'
             )
-            bot.send_message(chat_id=user_id, text=warning_text)
+        except:
+            pass
 
-            # Delete the original message
-            message.delete()
+        # Delete the offending message
+        try:
+            context.bot.delete_message(chat_id=chat.id, message_id=message.message_id)
+        except:
+            pass
 
-# Add the handler to the dispatcher
-dispatcher.add_handler(MessageHandler(Filters.text & (~Filters.command), detect_arabic))
+def start(update: Update, context: CallbackContext):
+    update.message.reply_text("Bot is running.")
 
-# Route for Telegram webhook
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), bot)
-    dispatcher.process_update(update)
-    return 'OK'
+def main():
+    init_db()
+    TOKEN = os.getenv('BOT_TOKEN')
+    updater = Updater(TOKEN, use_context=True)
+    dp = updater.dispatcher
 
-# Home route
-@app.route('/')
-def index():
-    return 'Bot is running.'
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
 
-if name == 'main':
-    # For local testing; in production, Koyeb will handle the server run
-    app.run(port=8443)
+    updater.start_polling()
+    updater.idle()
+
+if __name__ == '__main__':
+    main()
