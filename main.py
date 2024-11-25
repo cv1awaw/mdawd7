@@ -1,7 +1,7 @@
 # main.py
 import os
 import re
-import aiosqlite
+import sqlite3
 import logging
 from datetime import datetime
 from telegram import Update
@@ -30,12 +30,9 @@ should tag the related official (TARA or other officials).
 important questions and inquiries should be sent after the mentioned time.
 
 Please note that not complying with the above-mentioned regulation will result in: 
-1- Primary warning sent to the student and he/she will be banned from sending messages for  
-ONE DAY. 
-2- Second warning sent to the student and he/she will be banned from sending messages for  
-SEVEN DAYS. 
-3- Third warning sent to the student and he/she will be banned from sending messages and  
-May be addressed to DISCIPLINARY COMMITTEE.
+1- Primary warning sent to the student.
+2- Second warning sent to the student.
+3- Third warning sent to the student. May be addressed to DISCIPLINARY COMMITTEE.
 """
 
 # Configure logging
@@ -45,37 +42,43 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-async def init_db():
-    async with aiosqlite.connect(DATABASE) as db:
-        await db.execute('''
-            CREATE TABLE IF NOT EXISTS warnings (
-                user_id INTEGER PRIMARY KEY,
-                warnings INTEGER NOT NULL DEFAULT 0
-            )
-        ''')
-        await db.commit()
+def init_db():
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS warnings (
+            user_id INTEGER PRIMARY KEY,
+            warnings INTEGER NOT NULL DEFAULT 0
+        )
+    ''')
+    conn.commit()
+    conn.close()
 
 def is_arabic(text):
     return bool(re.search(r'[\u0600-\u06FF]', text))
 
-async def get_user_warnings(user_id):
-    async with aiosqlite.connect(DATABASE) as db:
-        async with db.execute('SELECT warnings FROM warnings WHERE user_id = ?', (user_id,)) as cursor:
-            row = await cursor.fetchone()
-            if row:
-                (warnings,) = row
-                return warnings
-            return 0
+def get_user_warnings(user_id):
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute('SELECT warnings FROM warnings WHERE user_id = ?', (user_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        (warnings,) = row
+        return warnings
+    return 0
 
-async def update_warnings(user_id, warnings):
-    async with aiosqlite.connect(DATABASE) as db:
-        await db.execute('''
-            INSERT INTO warnings (user_id, warnings) 
-            VALUES (?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET 
-                warnings=excluded.warnings
-        ''', (user_id, warnings))
-        await db.commit()
+def update_warnings(user_id, warnings):
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute('''
+        INSERT INTO warnings (user_id, warnings) 
+        VALUES (?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET 
+            warnings=excluded.warnings
+    ''', (user_id, warnings))
+    conn.commit()
+    conn.close()
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
@@ -99,7 +102,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if is_arabic(message.text):
-        warnings = await get_user_warnings(user.id) + 1
+        warnings = get_user_warnings(user.id) + 1
         logger.info(f"User {user.id} has {warnings} warning(s).")
 
         if warnings == 1:
@@ -109,7 +112,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             reason = "3- Third warning sent to the student. May be addressed to DISCIPLINARY COMMITTEE."
 
-        await update_warnings(user.id, warnings)
+        update_warnings(user.id, warnings)
 
         # Send private message with regulations
         try:
@@ -141,8 +144,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Bot is running.")
 
 def main():
-    import asyncio
-    asyncio.run(init_db())
+    init_db()
     TOKEN = os.getenv('BOT_TOKEN')
     if not TOKEN:
         logger.error("BOT_TOKEN is not set.")
