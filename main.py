@@ -125,16 +125,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"Alarm message sent to user {user.id}.")
         except Forbidden:
             logger.error("Cannot send private message to the user. They might not have started a conversation with the bot.")
-            # Send a message in the group notifying the user to start a private chat
-            try:
-                notification = f"{user.first_name}, please start a private chat with me to receive warnings and regulations."
-                await context.bot.send_message(
-                    chat_id=chat.id,
-                    text=notification
-                )
-                logger.info(f"Notification sent in group for user {user.id}.")
-            except Exception as e:
-                logger.error(f"Error sending notification in group: {e}")
+            # Removed the group notification as per your request
         except Exception as e:
             logger.error(f"Error sending private message: {e}")
 
