@@ -166,7 +166,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         except Forbidden:
             logger.error("Cannot send private message to the user. They might not have started a conversation with the bot.")
-            # Optionally, send a message in the group notifying the user to start a private chat
+            # Send a message in the group notifying the user to start a private chat
             try:
                 notification = f"{user.first_name}, please start a private chat with me to receive warnings and regulations."
                 await context.bot.send_message(
