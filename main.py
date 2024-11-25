@@ -85,8 +85,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = datetime.utcnow()
 
     if banned_until:
-        banned_until_dt = datetime.strptime(banned_until, '%Y-%m-%d %H:%M:%S')
-        if now < banned_until_dt:
+        try:
+            banned_until_dt = datetime.strptime(banned_until, '%Y-%m-%d %H:%M:%S')
+        except ValueError:
+            banned_until_dt = None
+
+        if banned_until_dt and now < banned_until_dt:
             try:
                 await context.bot.delete_message(chat_id=chat.id, message_id=message.message_id)
             except Exception as e:
@@ -146,6 +150,9 @@ def main():
     if not TOKEN:
         logger.error("BOT_TOKEN is not set.")
         return
+    TOKEN = TOKEN.strip()
+    if TOKEN.startswith('bot='):
+        TOKEN = TOKEN[4:].strip()
 
     application = ApplicationBuilder().token(TOKEN).build()
 
