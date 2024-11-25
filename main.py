@@ -45,10 +45,21 @@ logger = logging.getLogger(__name__)
 def init_db():
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
+    # Existing warnings table
     c.execute('''
         CREATE TABLE IF NOT EXISTS warnings (
             user_id INTEGER PRIMARY KEY,
             warnings INTEGER NOT NULL DEFAULT 0
+        )
+    ''')
+    # New warnings_history table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS warnings_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            warning_number INTEGER NOT NULL,
+            timestamp TEXT NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES warnings(user_id)
         )
     ''')
     conn.commit()
@@ -80,6 +91,17 @@ def update_warnings(user_id, warnings):
     conn.commit()
     conn.close()
 
+def log_warning(user_id, warning_number):
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+    c.execute('''
+        INSERT INTO warnings_history (user_id, warning_number, timestamp)
+        VALUES (?, ?, ?)
+    ''', (user_id, warning_number, timestamp))
+    conn.commit()
+    conn.close()
+
 def load_admin_ids():
     try:
         with open('Tara_access.txt', 'r') as file:
@@ -103,16 +125,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat.type not in ['group', 'supergroup']:
         return
 
-    # Check if the bot is an admin in the chat
-    try:
-        bot_member = await context.bot.get_chat_member(chat.id, context.bot.id)
-        if bot_member.status not in ['administrator', 'creator']:
-            logger.info("Bot is not an admin in the chat.")
-            return
-    except Exception as e:
-        logger.error(f"Error checking bot admin status: {e}")
-        return
-
     if is_arabic(message.text):
         warnings = get_user_warnings(user.id) + 1
         logger.info(f"User {user.id} has {warnings} warning(s).")
@@ -125,6 +137,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reason = "3- Third warning sent to the student. May be addressed to DISCIPLINARY COMMITTEE."
 
         update_warnings(user.id, warnings)
+        log_warning(user.id, warnings)  # Log the warning with timestamp
 
         # Send private message with regulations
         try:
@@ -153,7 +166,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"**Alarm Report**\n"
             f"**Student ID:** {user.id}\n"
             f"**Username:** {username}\n"
-            f"**Number of Alarms:** {warnings}"
+            f"**Number of Alarms:** {warnings}\n"
+            f"**Date:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
         )
 
         for admin_id in admin_ids:
