@@ -15,7 +15,7 @@ from telegram.ext import (
 from telegram.error import Forbidden, BadRequest
 
 DATABASE = 'warnings.db'
-ADMIN_IDS = [137745730]  # Not used anymore since we load from Tara_access.txt
+ADMIN_IDS = []  # Not used anymore since we load from Tara_access.txt
 
 REGULATIONS_MESSAGE = """
 **Communication Channels Regulation**
