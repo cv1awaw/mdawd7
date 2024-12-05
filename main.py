@@ -13,6 +13,7 @@ from telegram.ext import (
     ConversationHandler,
 )
 from telegram.error import Forbidden, BadRequest
+from telegram.utils.helpers import escape_markdown  # Import the escape function
 
 # ------------------ Constants ------------------
 
@@ -153,7 +154,9 @@ async def notify_admins(context, message_text):
         return
     for admin_id in admin_ids:
         try:
-            await context.bot.send_message(chat_id=admin_id, text=message_text, parse_mode='Markdown')
+            # Escape the message to prevent Markdown parsing errors
+            escaped_message = escape_markdown(message_text, version=2)
+            await context.bot.send_message(chat_id=admin_id, text=escaped_message, parse_mode='MarkdownV2')
             logger.info(f"Notification sent to admin {admin_id}.")
         except Forbidden:
             logger.error(f"Cannot send message to admin ID {admin_id}. They might have blocked the bot.")
@@ -176,10 +179,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat.type not in ['group', 'supergroup']:
         return
 
-    # Check if the user is an admin
+    # Check if the user is an admin by status
     try:
         member = await chat.get_member(user.id)
-        if not member.can_manage_chat:
+        if member.status not in ['administrator', 'creator']:
             await message.reply_text("Only group admins can register the group with this bot.")
             logger.warning(f"Non-admin user {user.id} attempted to register the group.")
             return
@@ -201,25 +204,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Start the registration conversation
     await GroupRegistration.GROUP_NAME.set()
-    await message.reply_text("Please enter the **name of the group**.", parse_mode='Markdown')
+    await message.reply_text("Please enter the **name of the group**.", parse_mode='MarkdownV2')
 
 async def group_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle the group name input."""
     group_name = update.message.text.strip()
     if not group_name:
-        await update.message.reply_text("Group name cannot be empty. Please enter a valid group name.", parse_mode='Markdown')
+        await update.message.reply_text("Group name cannot be empty. Please enter a valid group name.", parse_mode='MarkdownV2')
         return GroupRegistration.GROUP_NAME
 
     context.user_data['group_name'] = group_name
     await GroupRegistration.next()
-    await update.message.reply_text("Please enter the **Tara Team ID** for this group.", parse_mode='Markdown')
+    await update.message.reply_text("Please enter the **Tara Team ID** for this group.", parse_mode='MarkdownV2')
 
 async def tara_team_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle the Tara Team ID input and save the group info."""
     try:
         tara_team_id = int(update.message.text.strip())
     except ValueError:
-        await update.message.reply_text("Invalid ID. Please enter a numeric **Tara Team ID**.", parse_mode='Markdown')
+        await update.message.reply_text("Invalid ID. Please enter a numeric **Tara Team ID**.", parse_mode='MarkdownV2')
         return GroupRegistration.TARA_TEAM_ID
 
     group_name = context.user_data.get('group_name')
@@ -238,13 +241,16 @@ async def tara_team_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
 
-    await update.message.reply_text(f"✅ **Group '{group_name}' has been registered successfully!**", parse_mode='Markdown')
+    # Escape group_name to prevent Markdown issues
+    escaped_group_name = escape_markdown(group_name, version=2)
+
+    await update.message.reply_text(f"✅ **Group '{escaped_group_name}' has been registered successfully!**", parse_mode='MarkdownV2')
     logger.info(f"Group '{group_name}' (ID: {group_id}) registered with Tara Team ID: {tara_team_id}.")
 
     # Notify the Tara Team about the new registration
     notification = (
         f"**New Group Registered**\n"
-        f"**Group Name:** {group_name}\n"
+        f"**Group Name:** {escaped_group_name}\n"
         f"**Group ID:** {group_id}\n"
         f"**Tara Team ID:** {tara_team_id}"
     )
@@ -254,7 +260,7 @@ async def tara_team_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle the cancellation of group registration."""
-    await update.message.reply_text("Group registration has been cancelled.", parse_mode='Markdown')
+    await update.message.reply_text("Group registration has been cancelled.", parse_mode='MarkdownV2')
     logger.info(f"Group registration cancelled by user {update.effective_user.id}.")
     return ConversationHandler.END
 
@@ -271,10 +277,10 @@ async def add_groupname(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat.type not in ['group', 'supergroup']:
         return
 
-    # Check if the user is an admin
+    # Check if the user is an admin by status
     try:
         member = await chat.get_member(user.id)
-        if not member.can_manage_chat:
+        if member.status not in ['administrator', 'creator']:
             await message.reply_text("Only group admins can add new groups with this command.")
             logger.warning(f"Non-admin user {user.id} attempted to add a new group.")
             return
@@ -285,14 +291,14 @@ async def add_groupname(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     args = context.args
     if len(args) < 2:
-        await message.reply_text("Usage: `/add_groupname <group_name> <tara_team_id>`", parse_mode='Markdown')
+        await message.reply_text("Usage: `/add_groupname <group_name> <tara_team_id>`", parse_mode='MarkdownV2')
         return
 
     group_name = args[0].strip()
     try:
         tara_team_id = int(args[1].strip())
     except ValueError:
-        await message.reply_text("Invalid Tara Team ID. It must be a numeric value.", parse_mode='Markdown')
+        await message.reply_text("Invalid Tara Team ID. It must be a numeric value.", parse_mode='MarkdownV2')
         return
 
     group_id = chat.id
@@ -316,13 +322,16 @@ async def add_groupname(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
 
-    await message.reply_text(f"✅ **Group '{group_name}' has been added successfully!**", parse_mode='Markdown')
+    # Escape group_name to prevent Markdown issues
+    escaped_group_name = escape_markdown(group_name, version=2)
+
+    await message.reply_text(f"✅ **Group '{escaped_group_name}' has been added successfully!**", parse_mode='MarkdownV2')
     logger.info(f"Group '{group_name}' (ID: {group_id}) added with Tara Team ID: {tara_team_id}.")
 
     # Notify the Tara Team about the new addition
     notification = (
         f"**Group Added**\n"
-        f"**Group Name:** {group_name}\n"
+        f"**Group Name:** {escaped_group_name}\n"
         f"**Group ID:** {group_id}\n"
         f"**Tara Team ID:** {tara_team_id}"
     )
@@ -341,10 +350,10 @@ async def remove_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat.type not in ['group', 'supergroup']:
         return
 
-    # Check if the user is an admin
+    # Check if the user is an admin by status
     try:
         member = await chat.get_member(user.id)
-        if not member.can_manage_chat:
+        if member.status not in ['administrator', 'creator']:
             await message.reply_text("Only group admins can remove groups with this command.")
             logger.warning(f"Non-admin user {user.id} attempted to remove a group.")
             return
@@ -355,14 +364,14 @@ async def remove_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     args = context.args
     if len(args) < 2:
-        await message.reply_text("Usage: `/remove <group_name> <tara_team_id>`", parse_mode='Markdown')
+        await message.reply_text("Usage: `/remove <group_name> <tara_team_id>`", parse_mode='MarkdownV2')
         return
 
     group_name = args[0].strip()
     try:
         tara_team_id = int(args[1].strip())
     except ValueError:
-        await message.reply_text("Invalid Tara Team ID. It must be a numeric value.", parse_mode='Markdown')
+        await message.reply_text("Invalid Tara Team ID. It must be a numeric value.", parse_mode='MarkdownV2')
         return
 
     group_id = chat.id
@@ -374,7 +383,7 @@ async def remove_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
               (group_id, group_name, tara_team_id))
     row = c.fetchone()
     if not row:
-        await message.reply_text("No matching group found with the provided name and Tara Team ID.", parse_mode='Markdown')
+        await message.reply_text("No matching group found with the provided name and Tara Team ID.", parse_mode='MarkdownV2')
         logger.info(f"Group '{group_name}' (ID: {group_id}) with Tara Team ID: {tara_team_id} not found for removal.")
         conn.close()
         return
@@ -384,13 +393,16 @@ async def remove_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
 
-    await message.reply_text(f"✅ **Group '{group_name}' has been removed successfully!**", parse_mode='Markdown')
+    # Escape group_name to prevent Markdown issues
+    escaped_group_name = escape_markdown(group_name, version=2)
+
+    await message.reply_text(f"✅ **Group '{escaped_group_name}' has been removed successfully!**", parse_mode='MarkdownV2')
     logger.info(f"Group '{group_name}' (ID: {group_id}) removed from monitoring.")
 
     # Notify the Tara Team about the removal
     notification = (
         f"**Group Removed**\n"
-        f"**Group Name:** {group_name}\n"
+        f"**Group Name:** {escaped_group_name}\n"
         f"**Group ID:** {group_id}\n"
         f"**Tara Team ID:** {tara_team_id}"
     )
@@ -452,7 +464,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id=user.id,
                 text=alarm_message,
-                parse_mode='Markdown'
+                parse_mode='MarkdownV2'
             )
             logger.info(f"Alarm message sent to user {user.id}.")
         except Forbidden:
@@ -460,20 +472,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # Notify Tara Team that the user hasn't started the bot
             username = f"@{user.username}" if user.username else f"{user.first_name} {user.last_name}"
+            escaped_username = escape_markdown(username, version=2)
+            escaped_group_name = escape_markdown(group_name, version=2)
             notification_message = (
                 f"⚠️ **User Warning Alert**\n"
-                f"**Group Name:** {group_name}\n"
+                f"**Group Name:** {escaped_group_name}\n"
                 f"**User ID:** {user.id}\n"
-                f"**Username:** {username}\n"
+                f"**Username:** {escaped_username}\n"
                 f"**Number of Warnings:** {warnings}\n"
                 f"**Issue:** The user has triggered a warning but hasn't started a private conversation with the bot.\n"
                 f"**Action Needed:** Please reach out to the user to ensure they start a conversation with the bot to receive warnings."
             )
             try:
+                escaped_notification = escape_markdown(notification_message, version=2)
                 await context.bot.send_message(
                     chat_id=tara_team_id,
-                    text=notification_message,
-                    parse_mode='Markdown'
+                    text=escaped_notification,
+                    parse_mode='MarkdownV2'
                 )
                 logger.info(f"Notification sent to Tara Team (ID: {tara_team_id}) about user {user.id} not starting the bot.")
             except Forbidden:
@@ -484,19 +499,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Error sending private message: {e}")
 
         # Notify Tara Team about the number of alarms
+        username = f"@{user.username}" if user.username else f"{user.first_name} {user.last_name}"
+        escaped_username = escape_markdown(username, version=2)
+        escaped_group_name = escape_markdown(group_name, version=2)
         alarm_report = (
             f"**Alarm Report**\n"
-            f"**Group Name:** {group_name}\n"
+            f"**Group Name:** {escaped_group_name}\n"
             f"**User ID:** {user.id}\n"
-            f"**Username:** {username}\n"
+            f"**Username:** {escaped_username}\n"
             f"**Number of Warnings:** {warnings}\n"
             f"**Date:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
         )
         try:
+            escaped_alarm_report = escape_markdown(alarm_report, version=2)
             await context.bot.send_message(
                 chat_id=tara_team_id,
-                text=alarm_report,
-                parse_mode='Markdown'
+                text=escaped_alarm_report,
+                parse_mode='MarkdownV2'
             )
             logger.info(f"Alarm report sent to Tara Team (ID: {tara_team_id}).")
         except Forbidden:
@@ -517,15 +536,15 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     if admin_ids:
         error_message = (
             f"⚠️ **Bot Error**\n"
-            f"**Error:** {context.error}\n"
-            f"**Update:** {update}"
+            f"**Error:** {escape_markdown(str(context.error), version=2)}\n"
+            f"**Update:** {escape_markdown(str(update), version=2)}"
         )
         for admin_id in admin_ids:
             try:
                 await context.bot.send_message(
                     chat_id=admin_id,
                     text=error_message,
-                    parse_mode='Markdown'
+                    parse_mode='MarkdownV2'
                 )
             except Forbidden:
                 logger.error(f"Cannot send error message to admin ID {admin_id}. They might have blocked the bot.")
