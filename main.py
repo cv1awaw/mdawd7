@@ -170,7 +170,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Forbidden:
             logger.error("Cannot send private message to the user. They might not have started a conversation with the bot.")
             
-            # **New Code: Notify admins that the user hasn't started the bot**
+            # **Notify admins that the user hasn't started the bot**
             admin_ids = load_admin_ids()
             if admin_ids:
                 username = f"@{user.username}" if user.username else f"{user.first_name} {user.last_name}".strip()
@@ -196,8 +196,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 logger.warning(f"No admin IDs found in {TARA_ACCESS_FILE} to notify about the user not starting the bot.")
             
-            # Optionally, you can notify the group that the user hasn't started the bot
-            # Uncomment the following lines if you want to notify the group as well
+            # Optionally, notify the group about the user not starting the bot
+            # Uncomment the following lines if desired
             # try:
             #     await message.reply_text(
             #         f"⚠️ {user.mention_html()} has triggered a warning but hasn't started a private conversation with the bot. Please ensure they are aware of this requirement.",
@@ -209,18 +209,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Error sending private message: {e}")
 
-        # Notify admins about the number of alarms
+        # Always send Alarm Report to admins
         admin_ids = load_admin_ids()
         if not admin_ids:
             logger.warning(f"No admin IDs found in {TARA_ACCESS_FILE}.")
             return
 
         # Construct the alarm report message
-        username = f"@{user.username}" if user.username else f"{user.first_name} {user.last_name}".strip()
+        username_display = f"@{user.username}" if user.username else f"{user.first_name} {user.last_name}".strip() or "N/A"
         alarm_report = (
             f"**Alarm Report**\n"
             f"**Student ID:** {user.id}\n"
-            f"**Username:** {username if username else 'N/A'}\n"
+            f"**Username:** {username_display}\n"
             f"**Number of Alarms:** {warnings}\n"
             f"**Date:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
         )
@@ -238,7 +238,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"Error sending message to admin ID {admin_id}: {e}")
 
-        # Optionally, you can log this event or save it to a file for auditing
+        # Optionally, log this event or save it to a file for auditing
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Bot is running.")
@@ -434,15 +434,25 @@ async def set_warning_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE
         target_user_id = context.user_data['target_user_id']
         warnings = context.user_data['set_warnings']
         update_warnings(target_user_id, warnings)
-        # Optionally, fetch and update the latest warning in warnings_history
+        # Log the warning with timestamp (assuming the user has some details)
+        # Attempt to fetch user details from warnings_history
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
         c.execute('''
-            INSERT INTO warnings_history (user_id, warning_number, timestamp)
-            VALUES (?, ?, ?)
-        ''', (target_user_id, warnings, datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')))
-        conn.commit()
+            SELECT first_name, last_name, username FROM warnings_history 
+            WHERE user_id = ? 
+            ORDER BY id DESC 
+            LIMIT 1
+        ''', (target_user_id,))
+        row = c.fetchone()
         conn.close()
+
+        if row:
+            first_name, last_name, username = row
+        else:
+            first_name, last_name, username = None, None, None
+
+        log_warning(target_user_id, warnings, first_name, last_name, username)
         await query.edit_message_text(f"Set {warnings} warnings for user ID {target_user_id}.")
         logger.info(f"Set {warnings} warnings for user ID {target_user_id} by {update.effective_user.id}.")
     else:
