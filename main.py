@@ -66,12 +66,14 @@ def init_db():
             FOREIGN KEY(user_id) REFERENCES warnings(user_id)
         )
     ''')
-    # New groups table
+    # Updated groups table with admin_id
     c.execute('''
         CREATE TABLE IF NOT EXISTS groups (
             group_id INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
-            group_custom_id TEXT NOT NULL
+            group_custom_id TEXT NOT NULL,
+            admin_id INTEGER NOT NULL,
+            FOREIGN KEY(admin_id) REFERENCES admins(user_id)
         )
     ''')
     # New admins table
@@ -150,11 +152,13 @@ def remove_admin(user_id):
 def is_authorized(user_id):
     return user_id == AUTHORIZED_USER_ID
 
-def add_group_to_db(group_id, name, group_custom_id):
+def add_group_to_db(group_id, name, group_custom_id, admin_id):
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
-    c.execute('INSERT INTO groups (group_id, name, group_custom_id) VALUES (?, ?, ?)', 
-              (group_id, name, group_custom_id))
+    c.execute('''
+        INSERT INTO groups (group_id, name, group_custom_id, admin_id) 
+        VALUES (?, ?, ?, ?)
+    ''', (group_id, name, group_custom_id, admin_id))
     conn.commit()
     conn.close()
 
@@ -175,10 +179,18 @@ def change_group_name_in_db(group_id, new_name):
 def get_group_from_db(group_id):
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
-    c.execute('SELECT name, group_custom_id FROM groups WHERE group_id = ?', (group_id,))
+    c.execute('SELECT name, group_custom_id, admin_id FROM groups WHERE group_id = ?', (group_id,))
     row = c.fetchone()
     conn.close()
     return row
+
+def get_groups_by_admin(admin_id):
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute('SELECT group_id, name, group_custom_id FROM groups WHERE admin_id = ?', (admin_id,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
@@ -217,7 +229,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Forbidden:
             logger.error("Cannot send private message to the user. They might not have started a conversation with the bot.")
             
-            # **New Code: Notify admins that the user hasn't started the bot**
+            # **Notify Admins that the user hasn't started the bot**
             admin_ids = load_admin_ids()
             if admin_ids:
                 username = f"@{user.username}" if user.username else "NoUsername"
@@ -256,34 +268,59 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Error sending private message: {e}")
 
-        # Notify admins about the number of alarms
-        admin_ids = load_admin_ids()
-        if not admin_ids:
-            logger.warning("No admin IDs found in the database.")
+        # Notify relevant Taras about the number of alarms
+        group_info = get_group_from_db(chat.id)
+        if not group_info:
+            logger.warning(f"Group ID {chat.id} is not associated with any Tara.")
             return
+
+        group_name, group_custom_id, admin_id = group_info
 
         # Construct the alarm report message
         username = f"@{user.username}" if user.username else "NoUsername"
+        full_name = f"{user.first_name} {user.last_name}" if user.last_name else user.first_name
+        date_time = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+
+        # Check if the user has started the bot in private
+        try:
+            user_private = await context.bot.get_chat(user.id)
+            has_started = True
+        except Forbidden:
+            has_started = False
+
+        if not has_started:
+            private_info = "⚠️ **Note:** The user hasn't started a private conversation with the bot."
+        else:
+            private_info = ""
+
         alarm_report = (
             f"**Alarm Report**\n"
+            f"**Group Name:** {group_name}\n"
+            f"**Group Custom ID:** {group_custom_id}\n"
             f"**Student ID:** {user.id}\n"
             f"**Username:** {username}\n"
-            f"**Number of Alarms:** {warnings}\n"
-            f"**Date:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
+            f"**Full Name:** {full_name}\n"
+            f"**Number of Warnings:** {warnings}\n"
+            f"**Date:** {date_time}\n"
+            f"{private_info}"
         )
 
-        for admin_id in admin_ids:
+        # Fetch all groups associated with the Tara (admin_id)
+        tara_groups = get_groups_by_admin(admin_id)
+
+        for tara_group in tara_groups:
+            tara_group_id, tara_group_name, tara_group_custom_id = tara_group
             try:
                 await context.bot.send_message(
-                    chat_id=admin_id,
+                    chat_id=tara_group_id,
                     text=alarm_report,
                     parse_mode='Markdown'
                 )
-                logger.info(f"Alarm report sent to admin {admin_id}.")
+                logger.info(f"Alarm report sent to Tara's group {tara_group_id}.")
             except Forbidden:
-                logger.error(f"Cannot send message to admin ID {admin_id}. They might have blocked the bot.")
+                logger.error(f"Cannot send message to Tara's group ID {tara_group_id}. They might have blocked the bot.")
             except Exception as e:
-                logger.error(f"Error sending message to admin ID {admin_id}: {e}")
+                logger.error(f"Error sending message to Tara's group ID {tara_group_id}: {e}")
 
         # Optionally, you can log this event or save it to a file for auditing
 
@@ -322,11 +359,39 @@ async def receive_group_custom_id(update: Update, context: ContextTypes.DEFAULT_
     group_id = context.user_data['group_id']
     group_name = context.user_data['group_name']
 
+    # Ask for Tara (admin) ID to associate with this group
+    await update.message.reply_text("Please provide the Tara (admin) user ID to associate with this group.")
+    context.user_data['group_custom_id'] = group_custom_id
+    return 'GROUP_TARA_ID'
+
+async def receive_group_tara_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tara_id_str = update.message.text.strip()
+    try:
+        tara_id = int(tara_id_str)
+    except ValueError:
+        await update.message.reply_text("Please provide a valid numeric Tara (admin) user ID.")
+        return 'GROUP_TARA_ID'
+
+    # Check if the Tara exists in admins table
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute('SELECT user_id FROM admins WHERE user_id = ?', (tara_id,))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        await update.message.reply_text("The provided Tara (admin) user ID does not exist. Please add the admin first using /tara <user_id>.")
+        return ConversationHandler.END
+
+    group_id = context.user_data['group_id']
+    group_name = context.user_data['group_name']
+    group_custom_id = context.user_data['group_custom_id']
+    admin_id = tara_id
+
     # Save to database
     try:
-        add_group_to_db(group_id, group_name, group_custom_id)
-        await update.message.reply_text(f"Group '{group_name}' with custom ID '{group_custom_id}' has been added successfully.")
-        logger.info(f"Added group: ID={group_id}, Name={group_name}, Custom ID={group_custom_id}")
+        add_group_to_db(group_id, group_name, group_custom_id, admin_id)
+        await update.message.reply_text(f"Group '{group_name}' with custom ID '{group_custom_id}' has been added successfully and associated with Tara ID {admin_id}.")
+        logger.info(f"Added group: ID={group_id}, Name={group_name}, Custom ID={group_custom_id}, Associated Tara ID={admin_id}")
     except sqlite3.IntegrityError:
         await update.message.reply_text("This group is already registered.")
         logger.warning(f"Attempted to add an existing group: ID={group_id}")
@@ -354,8 +419,8 @@ async def tara_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         tara_id = int(context.args[0])
         add_admin(tara_id)
-        await update.message.reply_text(f"User ID {tara_id} has been added as an admin.")
-        logger.info(f"Added admin: {tara_id}")
+        await update.message.reply_text(f"User ID {tara_id} has been added as an admin (Tara).")
+        logger.info(f"Added admin (Tara): {tara_id}")
     except ValueError:
         await update.message.reply_text("Please provide a valid numeric user ID.")
     except Exception as e:
@@ -376,8 +441,8 @@ async def remove_tara_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         tara_id = int(context.args[0])
         remove_admin(tara_id)
-        await update.message.reply_text(f"User ID {tara_id} has been removed from admins.")
-        logger.info(f"Removed admin: {tara_id}")
+        await update.message.reply_text(f"User ID {tara_id} has been removed from admins (Taras).")
+        logger.info(f"Removed admin (Tara): {tara_id}")
     except ValueError:
         await update.message.reply_text("Please provide a valid numeric user ID.")
     except Exception as e:
@@ -453,12 +518,108 @@ async def receive_new_group_name(update: Update, context: ContextTypes.DEFAULT_T
         logger.error(f"Error changing group name: {e}")
     return ConversationHandler.END
 
-# Command handler for /start in groups (to add a group)
+# Command handler for adding a group to a specific Tara
+async def add_group_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not is_authorized(user.id):
+        await update.message.reply_text("You are not authorized to use this command.")
+        return
+
+    if len(context.args) != 1:
+        await update.message.reply_text("Usage: /add <tara_id>")
+        return
+
+    try:
+        tara_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("Please provide a valid numeric Tara (admin) user ID.")
+        return
+
+    # Check if the Tara exists
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute('SELECT user_id FROM admins WHERE user_id = ?', (tara_id,))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        await update.message.reply_text("The provided Tara (admin) user ID does not exist. Please add the admin first using /tara <user_id>.")
+        return
+
+    chat = update.effective_chat
+    if chat.type not in ['group', 'supergroup']:
+        await update.message.reply_text("This command can only be used in groups.")
+        return
+
+    group_id = chat.id
+
+    # Check if the group is already associated with a Tara
+    group_info = get_group_from_db(group_id)
+    if group_info:
+        current_admin_id = group_info[2]
+        if current_admin_id == tara_id:
+            await update.message.reply_text("This group is already associated with the specified Tara.")
+        else:
+            await update.message.reply_text(f"This group is already associated with Tara ID {current_admin_id}.")
+        return
+
+    # Initiate conversation to add group details
+    context.user_data['add_group_tara_id'] = tara_id
+    context.user_data['group_id'] = group_id
+    await update.message.reply_text("Please provide a name for this group.")
+    return GROUP_NAME
+
+# Update ConversationHandler for adding a group to a specific Tara
+async def receive_group_name_for_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    group_name = update.message.text.strip()
+    if not group_name:
+        await update.message.reply_text("Group name cannot be empty. Please provide a valid name.")
+        return GROUP_NAME
+    context.user_data['group_name'] = group_name
+    await update.message.reply_text("Please provide a custom ID for this group.")
+    return GROUP_CUSTOM_ID
+
+async def receive_group_custom_id_for_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    group_custom_id = update.message.text.strip()
+    if not group_custom_id:
+        await update.message.reply_text("Group custom ID cannot be empty. Please provide a valid custom ID.")
+        return GROUP_CUSTOM_ID
+
+    group_id = context.user_data['group_id']
+    group_name = context.user_data['group_name']
+    admin_id = context.user_data['add_group_tara_id']
+
+    # Save to database
+    try:
+        add_group_to_db(group_id, group_name, group_custom_id, admin_id)
+        await update.message.reply_text(f"Group '{group_name}' with custom ID '{group_custom_id}' has been added successfully and associated with Tara ID {admin_id}.")
+        logger.info(f"Added group: ID={group_id}, Name={group_name}, Custom ID={group_custom_id}, Associated Tara ID={admin_id}")
+    except sqlite3.IntegrityError:
+        await update.message.reply_text("This group is already registered.")
+        logger.warning(f"Attempted to add an existing group: ID={group_id}")
+    except Exception as e:
+        await update.message.reply_text("An error occurred while adding the group.")
+        logger.error(f"Error adding group: {e}")
+
+    return ConversationHandler.END
+
+# Command handler for /add to initiate group addition to a specific Tara
+add_group_conv_handler = ConversationHandler(
+    entry_points=[CommandHandler('add', add_group_command)],
+    states={
+        GROUP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_name_for_add)],
+        GROUP_CUSTOM_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_custom_id_for_add)],
+    },
+    fallbacks=[CommandHandler('cancel', cancel_conversation)],
+    allow_reentry=True,
+)
+
+# Existing conversation handler for adding a group via /start (if still needed)
 group_add_conv_handler = ConversationHandler(
     entry_points=[CommandHandler('start', start_group_addition)],
     states={
         GROUP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_name)],
         GROUP_CUSTOM_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_custom_id)],
+        'GROUP_TARA_ID': [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_tara_id)],
     },
     fallbacks=[CommandHandler('cancel', cancel_conversation)],
     allow_reentry=True,
@@ -466,7 +627,7 @@ group_add_conv_handler = ConversationHandler(
 
 # Conversation handler for changing group name
 change_group_conv_handler = ConversationHandler(
-    entry_points=[CommandHandler('change', change_group_command, pass_args=True)],
+    entry_points=[CommandHandler('change', change_group_command)],
     states={
         CHANGE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_new_group_name)],
     },
@@ -501,10 +662,12 @@ def main():
     application.add_handler(CommandHandler("tara", tara_command))
     application.add_handler(CommandHandler("remove", remove_tara_command))
     application.add_handler(CommandHandler("remove_group", remove_group_command))
+    application.add_handler(CommandHandler("change", change_group_command))
 
     # Conversation handlers
     application.add_handler(group_add_conv_handler)
     application.add_handler(change_group_conv_handler)
+    application.add_handler(add_group_conv_handler)
 
     application.run_polling()
 
