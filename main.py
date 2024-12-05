@@ -14,7 +14,6 @@ from telegram.ext import (
 from telegram.error import Forbidden, BadRequest
 
 DATABASE = 'warnings.db'
-ADMIN_IDS = []  # Not used anymore since we load from Tara_access.txt
 
 # User ID who can use /set and /tara commands
 SUPER_ADMIN_ID = 6177929931
@@ -175,7 +174,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         update_warnings(user.id, warnings)
         log_warning(user.id, warnings)  # Log the warning with timestamp
 
-        # Send private message with regulations
+        # Initialize variables for admin notifications
+        admin_notification_messages = []
+        alarm_report = ""
+
+        # Attempt to send private message with regulations
         try:
             alarm_message = f"{REGULATIONS_MESSAGE}\n\n{reason}"
             await context.bot.send_message(
@@ -184,92 +187,70 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='Markdown'
             )
             logger.info(f"Alarm message sent to user {user.id}.")
+            # Prepare alarm report
+            admin_notification_messages.append(f"✅ **Alarm sent to user {user.id}.**")
         except Forbidden:
             logger.error("Cannot send private message to the user. They might not have started a conversation with the bot.")
-
-            # **New Code: Notify admins that the user hasn't started the bot**
-            admin_ids = load_admin_ids()
-            if admin_ids:
-                full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
-                username = f"@{user.username}" if user.username else "NoUsername"
-                notification_message = (
-                    f"⚠️ **Notification:**\n"
-                    f"**User ID:** {user.id}\n"
-                    f"**Full Name:** {full_name if full_name else 'N/A'}\n"
-                    f"**Username:** {username}\n"
-                    f"**Issue:** The user has triggered a warning but hasn't started a private conversation with the bot.\n"
-                    f"**Action Needed:** Please reach out to the user to ensure they start a conversation with the bot to receive warnings."
-                )
-                for admin_id in admin_ids:
-                    try:
-                        await context.bot.send_message(
-                            chat_id=admin_id,
-                            text=notification_message,
-                            parse_mode='Markdown'
-                        )
-                        logger.info(f"Notification sent to admin {admin_id} about user {user.id} not starting the bot.")
-                    except Forbidden:
-                        logger.error(f"Cannot send notification to admin ID {admin_id}. They might have blocked the bot.")
-                    except Exception as e:
-                        logger.error(f"Error sending notification to admin ID {admin_id}: {e}")
-            else:
-                logger.warning("No admin IDs found in Tara_access.txt to notify about the user not starting the bot.")
-            
-            # Optionally, you can notify the group that the user hasn't started the bot
-            # Uncomment the following lines if you want to notify the group as well
-            # try:
-            #     await message.reply_text(
-            #         f"⚠️ {user.mention_html()} has triggered a warning but hasn't started a private conversation with the bot. Please ensure they are aware of this requirement.",
-            #         parse_mode='HTML'
-            #     )
-            # except Exception as e:
-            #     logger.error(f"Error notifying group about user {user.id}: {e}")
-
+            admin_notification_messages.append(
+                f"⚠️ **User {user.id} hasn't started the bot.**"
+                f" **Full Name:** {user.first_name or 'N/A'} {user.last_name or ''}".strip()
+                f" **Username:** @{user.username if user.username else 'N/A'}"
+                f" **Warning Number:** {warnings}"
+                f" **Reason:** {reason}"
+            )
         except Exception as e:
             logger.error(f"Error sending private message: {e}")
+            admin_notification_messages.append(
+                f"⚠️ **Error sending alarm to user {user.id}:** {e}"
+            )
 
-        # Notify admins about the number of alarms
+        # Notify admins regardless of the success of sending the private message
         admin_ids = load_admin_ids()
         if not admin_ids:
             logger.warning("No admin IDs found in Tara_access.txt.")
-            return
-
-        # Construct the alarm report message with full name and username
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
-        c.execute('SELECT first_name, last_name, username FROM users WHERE user_id = ?', (user.id,))
-        user_info = c.fetchone()
-        conn.close()
-
-        if user_info:
-            first_name, last_name, username = user_info
-            full_name = f"{first_name or ''} {last_name or ''}".strip()
-            username = f"@{username}" if username else "NoUsername"
         else:
-            full_name = "N/A"
-            username = "NoUsername"
+            # Fetch user info from the database for detailed report
+            conn = sqlite3.connect(DATABASE)
+            c = conn.cursor()
+            c.execute('SELECT first_name, last_name, username FROM users WHERE user_id = ?', (user.id,))
+            user_info = c.fetchone()
+            conn.close()
 
-        alarm_report = (
-            f"**Alarm Report**\n"
-            f"**Student ID:** {user.id}\n"
-            f"**Full Name:** {full_name}\n"
-            f"**Username:** {username}\n"
-            f"**Number of Alarms:** {warnings}\n"
-            f"**Date:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
-        )
+            if user_info:
+                first_name, last_name, username = user_info
+                full_name = f"{first_name or ''} {last_name or ''}".strip() or "N/A"
+                username = f"@{username}" if username else "NoUsername"
+            else:
+                full_name = "N/A"
+                username = "NoUsername"
 
-        for admin_id in admin_ids:
-            try:
-                await context.bot.send_message(
-                    chat_id=admin_id,
-                    text=alarm_report,
-                    parse_mode='Markdown'
-                )
-                logger.info(f"Alarm report sent to admin {admin_id}.")
-            except Forbidden:
-                logger.error(f"Cannot send message to admin ID {admin_id}. They might have blocked the bot.")
-            except Exception as e:
-                logger.error(f"Error sending message to admin ID {admin_id}: {e}")
+            # Construct the main alarm report
+            alarm_report = (
+                f"**Alarm Report**\n"
+                f"**Student ID:** {user.id}\n"
+                f"**Full Name:** {full_name}\n"
+                f"**Username:** {username}\n"
+                f"**Number of Warnings:** {warnings}\n"
+                f"**Reason:** {reason}\n"
+                f"**Date:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n"
+            )
+
+            # Combine with specific messages
+            if admin_notification_messages:
+                alarm_report += "\n".join(admin_notification_messages)
+
+            for admin_id in admin_ids:
+                try:
+                    await context.bot.send_message(
+                        chat_id=admin_id,
+                        text=alarm_report,
+                        parse_mode='Markdown'
+                    )
+                    logger.info(f"Alarm report sent to admin {admin_id}.")
+                except Forbidden:
+                    logger.error(f"Cannot send message to admin ID {admin_id}. They might have blocked the bot.")
+                except Exception as e:
+                    logger.error(f"Error sending message to admin ID {admin_id}: {e}")
 
         # Optionally, you can log this event or save it to a file for auditing
 
@@ -302,6 +283,19 @@ async def set_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     update_warnings(target_user_id, new_warnings)
     log_warning(target_user_id, new_warnings)  # Log the update as a warning for tracking
+
+    # Optionally, attempt to notify the user about the warning update
+    try:
+        await context.bot.send_message(
+            chat_id=target_user_id,
+            text=f"🔧 Your number of warnings has been set to {new_warnings} by the administrator.",
+            parse_mode='Markdown'
+        )
+        logger.info(f"Notification sent to user {target_user_id} about warning update.")
+    except Forbidden:
+        logger.error(f"Cannot send warning update to user {target_user_id}. They might not have started the bot.")
+    except Exception as e:
+        logger.error(f"Error sending warning update to user {target_user_id}: {e}")
 
     await update.message.reply_text(f"Set {new_warnings} warnings for user ID {target_user_id}.")
     logger.info(f"Set {new_warnings} warnings for user ID {target_user_id} by admin {user.id}.")
