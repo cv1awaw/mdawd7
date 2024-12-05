@@ -285,12 +285,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         alarm_report = (
             f"**Alarm Report**\n"
-            f"**Group Name:** {group_name}\n"
-            f"**Group Custom ID:** {group_custom_id if group_custom_id else 'N/A'}\n"
             f"**Student ID:** {user.id}\n"
             f"**Username:** {username}\n"
-            f"**Full Name:** {full_name}\n"
-            f"**Number of Warnings:** {warnings}\n"
+            f"**Account Name:** {full_name}\n"
+            f"**Number of Alarms:** {warnings}\n"
             f"**Date:** {date_time}\n"
             f"{private_info}"
         )
@@ -388,8 +386,6 @@ async def receive_group_custom_id_for_add(update: Update, context: ContextTypes.
 
     group_id = context.user_data['group_id']
     group_name = context.user_data['group_name']
-
-    # Ask for Tara (admin) ID to associate with this group (already known)
     tara_id = context.user_data['add_group_tara_id']
 
     # Save to database
@@ -459,27 +455,6 @@ async def receive_group_name_for_add_group_manual(update: Update, context: Conte
     await update.message.reply_text("Group saved.")
 
     return ConversationHandler.END
-
-# Conversation handler for adding a group via /add <tara_id>
-add_group_conv_handler = ConversationHandler(
-    entry_points=[CommandHandler('add', add_group_command)],
-    states={
-        GROUP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_name_for_add_group)],
-        GROUP_CUSTOM_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_custom_id_for_add)],
-    },
-    fallbacks=[CommandHandler('cancel', lambda update, context: cancel_conversation(update, context))],
-    allow_reentry=True,
-)
-
-# Conversation handler for adding a group via /add_group <group_id>
-add_group_conv_handler_manual = ConversationHandler(
-    entry_points=[CommandHandler('add_group', add_group_command_manual)],
-    states={
-        ADD_GROUP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_name_for_add_group_manual)],
-    },
-    fallbacks=[CommandHandler('cancel', lambda update, context: cancel_conversation(update, context))],
-    allow_reentry=True,
-)
 
 # Conversation handler for changing group name
 async def change_group_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -665,9 +640,34 @@ def main():
     application.add_handler(CommandHandler("change", change_group_command))
 
     # Conversation handlers
-    application.add_handler(add_group_conv_handler)  # /add <tara_id>
-    application.add_handler(add_group_conv_handler_manual)  # /add_group <group_id>
-    application.add_handler(change_group_conv_handler)  # /change <group_id>
+    application.add_handler(ConversationHandler(
+        entry_points=[CommandHandler('add', add_group_command)],
+        states={
+            GROUP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_name_for_add_group)],
+            GROUP_CUSTOM_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_custom_id_for_add)],
+            GROUP_TARA_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_tara_id)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel_conversation)],
+        allow_reentry=True,
+    ))
+
+    application.add_handler(ConversationHandler(
+        entry_points=[CommandHandler('add_group', add_group_command_manual)],
+        states={
+            ADD_GROUP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_name_for_add_group_manual)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel_conversation)],
+        allow_reentry=True,
+    ))
+
+    application.add_handler(ConversationHandler(
+        entry_points=[CommandHandler('change', change_group_command)],
+        states={
+            CHANGE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_new_group_name)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel_conversation)],
+        allow_reentry=True,
+    ))
 
     application.run_polling()
 
