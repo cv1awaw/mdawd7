@@ -192,11 +192,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Forbidden:
             logger.error("Cannot send private message to the user. They might not have started a conversation with the bot.")
             admin_notification_messages.append(
-                f"⚠️ **User {user.id} hasn't started the bot.**"
-                f" **Full Name:** {user.first_name or 'N/A'} {user.last_name or ''}".strip()
-                f" **Username:** @{user.username if user.username else 'N/A'}"
-                f" **Warning Number:** {warnings}"
-                f" **Reason:** {reason}"
+                (
+                    f"⚠️ **User {user.id} hasn't started the bot.** "
+                    f"**Full Name:** {user.first_name or 'N/A'} {user.last_name or ''} "
+                    f"**Username:** @{user.username if user.username else 'N/A'} "
+                    f"**Warning Number:** {warnings} "
+                    f"**Reason:** {reason}"
+                ).strip()
             )
         except Exception as e:
             logger.error(f"Error sending private message: {e}")
