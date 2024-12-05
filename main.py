@@ -343,7 +343,7 @@ async def add_tara_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Added user ID {new_admin_id} as a Tara admin.")
     logger.info(f"Added new Tara admin ID {new_admin_id} by super admin {user.id}.")
 
-# New Command: /info
+# Enhanced Command: /info
 async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Provide information about all users who have received warnings. Accessible by Tara admins."""
     user = update.effective_user
@@ -369,7 +369,9 @@ async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No users have received warnings yet.")
         return
 
-    info_message = "**Users with Warnings:**\n"
+    # Initialize the info message
+    info_message = "**Users with Warnings:**\n\n"
+
     for row in rows:
         user_id, first_name, last_name, username, warnings = row
         full_name = f"{first_name or ''} {last_name or ''}".strip() or "N/A"
@@ -392,6 +394,7 @@ async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"Info command used by admin {user.id}.")
     except Exception as e:
         logger.error(f"Error sending info message: {e}")
+        await update.message.reply_text("An error occurred while generating the info report.")
 
 def main():
     """Initialize the bot and add handlers."""
