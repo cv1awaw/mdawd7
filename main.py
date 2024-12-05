@@ -158,6 +158,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Pass additional user information to log_warning
         log_warning(user.id, warnings, user.first_name, user.last_name, user.username)
 
+        # Initialize flag to track if user is in bot
+        user_in_bot = False
+
         # Send private message with regulations
         try:
             alarm_message = f"{REGULATIONS_MESSAGE}\n\n{reason}"
@@ -167,17 +170,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.MARKDOWN
             )
             logger.info(f"Alarm message sent to user {user.id}.")
+            user_in_bot = True
         except Forbidden:
             logger.error("Cannot send private message to the user. They might not have started a conversation with the bot.")
             
             # **Notify admins that the user hasn't started the bot**
             admin_ids = load_admin_ids()
             if admin_ids:
-                username = f"@{user.username}" if user.username else f"{user.first_name} {user.last_name}".strip()
+                username = f"@{user.username}" if user.username else f"{user.first_name} {user.last_name}".strip() or "N/A"
                 notification_message = (
                     f"⚠️ **Notification:**\n"
                     f"**User ID:** {user.id}\n"
-                    f"**Username:** {username if username else 'N/A'}\n"
+                    f"**Username:** {username}\n"
                     f"**Issue:** The user has triggered a warning but hasn't started a private conversation with the bot.\n"
                     f"**Action Needed:** Please reach out to the user to ensure they start a conversation with the bot to receive warnings."
                 )
@@ -222,7 +226,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"**Student ID:** {user.id}\n"
             f"**Username:** {username_display}\n"
             f"**Number of Alarms:** {warnings}\n"
-            f"**Date:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
+            f"**Date:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n"
+            f"**User in Bot:** {'Yes' if user_in_bot else 'No'}"
         )
 
         for admin_id in admin_ids:
