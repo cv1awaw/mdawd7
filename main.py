@@ -191,6 +191,7 @@ def get_groups_by_admin(admin_id):
     conn.close()
     return rows
 
+# Function to handle all messages in groups
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message or not message.text:
@@ -657,8 +658,6 @@ def main():
         fallbacks=[CommandHandler('cancel', cancel_conversation)],
         allow_reentry=True,
     ))
-
-    application.add_handler(change_group_conv_handler)
 
     application.run_polling()
 
