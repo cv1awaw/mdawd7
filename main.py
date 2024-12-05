@@ -16,7 +16,7 @@ from telegram.error import Forbidden, BadRequest
 DATABASE = 'warnings.db'
 
 # User ID who can use /set and /tara commands
-SUPER_ADMIN_ID = 6177929931
+SUPER_ADMIN_ID = 6177929931  # Replace with the actual super admin Telegram user ID
 
 REGULATIONS_MESSAGE = """
 **Communication Channels Regulation**
@@ -44,16 +44,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def init_db():
+    """Initialize the SQLite database with required tables."""
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
-    # Existing warnings table
+    # Table to store user warnings
     c.execute('''
         CREATE TABLE IF NOT EXISTS warnings (
             user_id INTEGER PRIMARY KEY,
             warnings INTEGER NOT NULL DEFAULT 0
         )
     ''')
-    # New warnings_history table
+    # Table to log warning history
     c.execute('''
         CREATE TABLE IF NOT EXISTS warnings_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,7 +64,7 @@ def init_db():
             FOREIGN KEY(user_id) REFERENCES warnings(user_id)
         )
     ''')
-    # New users table to store user information
+    # Table to store user information
     c.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -76,9 +77,11 @@ def init_db():
     conn.close()
 
 def is_arabic(text):
+    """Check if the text contains Arabic characters."""
     return bool(re.search(r'[\u0600-\u06FF]', text))
 
 def get_user_warnings(user_id):
+    """Retrieve the number of warnings for a specific user."""
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
     c.execute('SELECT warnings FROM warnings WHERE user_id = ?', (user_id,))
@@ -90,6 +93,7 @@ def get_user_warnings(user_id):
     return 0
 
 def update_warnings(user_id, warnings):
+    """Update the number of warnings for a user."""
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
     c.execute('''
@@ -102,6 +106,7 @@ def update_warnings(user_id, warnings):
     conn.close()
 
 def log_warning(user_id, warning_number):
+    """Log a warning event for a user."""
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
     timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
@@ -113,9 +118,11 @@ def log_warning(user_id, warning_number):
     conn.close()
 
 def load_admin_ids():
+    """Load admin user IDs from Tara_access.txt."""
     try:
         with open('Tara_access.txt', 'r') as file:
             admin_ids = [int(line.strip()) for line in file if line.strip().isdigit()]
+        logger.info(f"Loaded admin IDs: {admin_ids}")
         return admin_ids
     except FileNotFoundError:
         logger.error("Tara_access.txt not found! Please create the file and add admin Telegram user IDs.")
@@ -125,6 +132,7 @@ def load_admin_ids():
         return []
 
 def save_admin_id(new_admin_id):
+    """Append a new admin ID to Tara_access.txt."""
     try:
         with open('Tara_access.txt', 'a') as file:
             file.write(f"{new_admin_id}\n")
@@ -133,6 +141,7 @@ def save_admin_id(new_admin_id):
         logger.error(f"Error saving new admin ID {new_admin_id}: {e}")
 
 def update_user_info(user):
+    """Update or insert user information into the users table."""
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
     c.execute('''
@@ -147,6 +156,7 @@ def update_user_info(user):
     conn.close()
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle incoming messages and process warnings."""
     message = update.message
     if not message or not message.text:
         return  # Ignore non-text messages
@@ -155,7 +165,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = message.chat
 
     if chat.type not in ['group', 'supergroup']:
-        return
+        return  # Only process messages from groups
 
     # Update user info in the database
     update_user_info(user)
@@ -176,7 +186,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Initialize variables for admin notifications
         admin_notification_messages = []
-        alarm_report = ""
 
         # Attempt to send private message with regulations
         try:
@@ -221,17 +230,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if user_info:
                 first_name, last_name, username = user_info
                 full_name = f"{first_name or ''} {last_name or ''}".strip() or "N/A"
-                username = f"@{username}" if username else "NoUsername"
+                username_display = f"@{username}" if username else "NoUsername"
             else:
                 full_name = "N/A"
-                username = "NoUsername"
+                username_display = "NoUsername"
 
             # Construct the main alarm report
             alarm_report = (
                 f"**Alarm Report**\n"
                 f"**Student ID:** {user.id}\n"
                 f"**Full Name:** {full_name}\n"
-                f"**Username:** {username}\n"
+                f"**Username:** {username_display}\n"
                 f"**Number of Warnings:** {warnings}\n"
                 f"**Reason:** {reason}\n"
                 f"**Date:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n"
@@ -257,10 +266,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Optionally, you can log this event or save it to a file for auditing
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Respond to the /start command."""
     await update.message.reply_text("Bot is running.")
+    logger.info(f"/start command received from user {update.effective_user.id}.")
 
 # New Command: /set <user_id> <number>
 async def set_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Set the number of warnings for a specific user. Only accessible by SUPER_ADMIN_ID."""
     user = update.effective_user
     if user.id != SUPER_ADMIN_ID:
         await update.message.reply_text("You don't have permission to use this command.")
@@ -286,7 +298,7 @@ async def set_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     update_warnings(target_user_id, new_warnings)
     log_warning(target_user_id, new_warnings)  # Log the update as a warning for tracking
 
-    # Optionally, attempt to notify the user about the warning update
+    # Attempt to notify the user about the warning update
     try:
         await context.bot.send_message(
             chat_id=target_user_id,
@@ -304,6 +316,7 @@ async def set_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # New Command: /tara <admin_id>
 async def add_tara_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Add a new admin ID to Tara_access.txt. Only accessible by SUPER_ADMIN_ID."""
     user = update.effective_user
     if user.id != SUPER_ADMIN_ID:
         await update.message.reply_text("You don't have permission to use this command.")
@@ -332,6 +345,7 @@ async def add_tara_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # New Command: /info
 async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Provide information about all users who have received warnings. Accessible by Tara admins."""
     user = update.effective_user
     admin_ids = load_admin_ids()
     if user.id not in admin_ids:
@@ -359,18 +373,18 @@ async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for row in rows:
         user_id, first_name, last_name, username, warnings = row
         full_name = f"{first_name or ''} {last_name or ''}".strip() or "N/A"
-        username = f"@{username}" if username else "NoUsername"
+        username_display = f"@{username}" if username else "NoUsername"
         info_message += (
             f"• **User ID:** {user_id}\n"
             f"  **Full Name:** {full_name}\n"
-            f"  **Username:** {username}\n"
+            f"  **Username:** {username_display}\n"
             f"  **Warnings:** {warnings}\n\n"
         )
 
     try:
-        # Telegram has a message length limit, so it's good to check and split if necessary
+        # Telegram has a message length limit (4096 characters)
         if len(info_message) > 4000:
-            # Split the message into chunks
+            # Split the message into chunks of 4000 characters
             for i in range(0, len(info_message), 4000):
                 await update.message.reply_text(info_message[i:i+4000], parse_mode='Markdown')
         else:
@@ -380,6 +394,7 @@ async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error sending info message: {e}")
 
 def main():
+    """Initialize the bot and add handlers."""
     init_db()
     TOKEN = os.getenv('BOT_TOKEN')
     if not TOKEN:
@@ -395,15 +410,16 @@ def main():
 
     application = ApplicationBuilder().token(TOKEN).build()
 
-    # Existing handlers
+    # Add command handlers
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    # New handlers
     application.add_handler(CommandHandler("set", set_warnings))
     application.add_handler(CommandHandler("tara", add_tara_admin))
     application.add_handler(CommandHandler("info", info))
 
+    # Add message handler for processing warnings
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    logger.info("Bot is starting...")
     application.run_polling()
 
 if __name__ == '__main__':
