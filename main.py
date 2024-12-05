@@ -3,7 +3,8 @@ import re
 import sqlite3
 import logging
 from datetime import datetime
-from telegram import Update, ParseMode
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.constants import ParseMode
 from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,
@@ -397,10 +398,15 @@ async def set_warning_number(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"**Id:** {target_user_id}\n"
         f"**Username:** {username}"
     )
-    await update.message.reply_text(confirmation_message, reply_markup=telegram.InlineKeyboardMarkup(
-        [[telegram.InlineKeyboardButton("Confirm", callback_data='confirm_set_warning'),
-          telegram.InlineKeyboardButton("Cancel", callback_data='cancel_set_warning')]]
-    ))
+    # Create inline keyboard for confirmation
+    keyboard = [
+        [
+            InlineKeyboardButton("Confirm", callback_data='confirm_set_warning'),
+            InlineKeyboardButton("Cancel", callback_data='cancel_set_warning')
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(confirmation_message, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
     return CONFIRM_WARNING
 
 # /set command handler - confirms or cancels the setting
