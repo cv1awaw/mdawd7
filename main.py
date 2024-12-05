@@ -3,7 +3,7 @@ import re
 import sqlite3
 import logging
 from datetime import datetime
-from telegram import Update, ForceReply
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,
@@ -191,6 +191,7 @@ def get_groups_by_admin(admin_id):
     conn.close()
     return rows
 
+# Function to handle all messages in groups
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message or not message.text:
@@ -253,7 +254,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         logger.error(f"Error sending notification to admin ID {admin_id}: {e}")
             else:
                 logger.warning("No admin IDs found in the database to notify about the user not starting the bot.")
-        
+
         except Exception as e:
             logger.error(f"Error sending private message: {e}")
 
@@ -314,7 +315,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             logger.warning(f"Group ID {chat.id} has no associated Tara to notify.")
 
-        # Optionally, you can log this event or save it to a file for auditing
+        # **Send Confirmation Message to Group (Optional)**
+        # Uncomment the following line if you want to notify the group that a warning has been issued
+        # await message.reply_text(f"⚠️ {user.first_name} has been warned for violating the group regulations.")
 
 # Conversation Handlers
 
@@ -386,39 +389,14 @@ async def receive_group_custom_id_for_add(update: Update, context: ContextTypes.
     group_id = context.user_data['group_id']
     group_name = context.user_data['group_name']
 
-    # Ask for Tara (admin) ID to associate with this group
-    await update.message.reply_text("Please provide the Tara (admin) user ID to associate with this group.")
-    context.user_data['group_custom_id'] = group_custom_id
-    return GROUP_TARA_ID
-
-async def receive_group_tara_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    tara_id_str = update.message.text.strip()
-    try:
-        tara_id = int(tara_id_str)
-    except ValueError:
-        await update.message.reply_text("Please provide a valid numeric Tara (admin) user ID.")
-        return GROUP_TARA_ID
-
-    # Check if the Tara exists in admins table
-    conn = sqlite3.connect(DATABASE)
-    c = conn.cursor()
-    c.execute('SELECT user_id FROM admins WHERE user_id = ?', (tara_id,))
-    row = c.fetchone()
-    conn.close()
-    if not row:
-        await update.message.reply_text("The provided Tara (admin) user ID does not exist. Please add the admin first using /tara <user_id>.")
-        return ConversationHandler.END
-
-    group_id = context.user_data['group_id']
-    group_name = context.user_data['group_name']
-    group_custom_id = context.user_data['group_custom_id']
-    admin_id = tara_id
+    # Ask for Tara (admin) ID to associate with this group (already known)
+    tara_id = context.user_data['add_group_tara_id']
 
     # Save to database
     try:
-        add_group_to_db(group_id, group_name, group_custom_id, admin_id)
-        await update.message.reply_text(f"Group '{group_name}' with custom ID '{group_custom_id}' has been added successfully and associated with Tara ID {admin_id}.")
-        logger.info(f"Added group: ID={group_id}, Name={group_name}, Custom ID={group_custom_id}, Associated Tara ID={admin_id}")
+        add_group_to_db(group_id, group_name, group_custom_id, tara_id)
+        await update.message.reply_text(f"Group '{group_name}' with custom ID '{group_custom_id}' has been added successfully and associated with Tara ID {tara_id}.")
+        logger.info(f"Added group: ID={group_id}, Name={group_name}, Custom ID={group_custom_id}, Associated Tara ID={tara_id}")
     except sqlite3.IntegrityError:
         await update.message.reply_text("This group is already registered.")
         logger.warning(f"Attempted to add an existing group: ID={group_id}")
@@ -430,18 +408,6 @@ async def receive_group_tara_id(update: Update, context: ContextTypes.DEFAULT_TY
     await update.message.reply_text("Group saved.")
 
     return ConversationHandler.END
-
-# Conversation handler for adding a group via /add <tara_id>
-add_group_conv_handler = ConversationHandler(
-    entry_points=[CommandHandler('add', add_group_command)],
-    states={
-        GROUP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_name_for_add_group)],
-        GROUP_CUSTOM_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_custom_id_for_add)],
-        GROUP_TARA_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_tara_id)],
-    },
-    fallbacks=[CommandHandler('cancel', lambda update, context: cancel_conversation(update, context))],
-    allow_reentry=True,
-)
 
 # Conversation handler for adding a group via /add_group <group_id>
 async def add_group_command_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -494,6 +460,18 @@ async def receive_group_name_for_add_group_manual(update: Update, context: Conte
 
     return ConversationHandler.END
 
+# Conversation handler for adding a group via /add <tara_id>
+add_group_conv_handler = ConversationHandler(
+    entry_points=[CommandHandler('add', add_group_command)],
+    states={
+        GROUP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_name_for_add_group)],
+        GROUP_CUSTOM_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_custom_id_for_add)],
+    },
+    fallbacks=[CommandHandler('cancel', lambda update, context: cancel_conversation(update, context))],
+    allow_reentry=True,
+)
+
+# Conversation handler for adding a group via /add_group <group_id>
 add_group_conv_handler_manual = ConversationHandler(
     entry_points=[CommandHandler('add_group', add_group_command_manual)],
     states={
@@ -690,9 +668,6 @@ def main():
     application.add_handler(add_group_conv_handler)  # /add <tara_id>
     application.add_handler(add_group_conv_handler_manual)  # /add_group <group_id>
     application.add_handler(change_group_conv_handler)  # /change <group_id>
-
-    # Existing conversation handler for adding a group via /add <tara_id>
-    # Note: Already included above
 
     application.run_polling()
 
