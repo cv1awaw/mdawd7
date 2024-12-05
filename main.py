@@ -3,25 +3,21 @@ import re
 import sqlite3
 import logging
 from datetime import datetime
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.constants import ParseMode
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,
     MessageHandler,
     CommandHandler,
     filters,
-    ConversationHandler,
 )
 from telegram.error import Forbidden, BadRequest
 
-# Constants
 DATABASE = 'warnings.db'
-TARA_ACCESS_FILE = 'Tara_access.txt'
-PRIMARY_ADMIN_ID = 6177929931  # The main admin who can add/remove TARA
+ADMIN_IDS = []  # Not used anymore since we load from Tara_access.txt
 
-# States for ConversationHandler
-SET_WARNING, CONFIRM_WARNING = range(2)
+# User ID who can use /set and /tara commands
+SUPER_ADMIN_ID = 6177929931
 
 REGULATIONS_MESSAGE = """
 **Communication Channels Regulation**
@@ -58,17 +54,23 @@ def init_db():
             warnings INTEGER NOT NULL DEFAULT 0
         )
     ''')
-    # Updated warnings_history table with additional user details
+    # New warnings_history table
     c.execute('''
         CREATE TABLE IF NOT EXISTS warnings_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
-            first_name TEXT,
-            last_name TEXT,
-            username TEXT,
             warning_number INTEGER NOT NULL,
             timestamp TEXT NOT NULL,
             FOREIGN KEY(user_id) REFERENCES warnings(user_id)
+        )
+    ''')
+    # New users table to store user information
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            first_name TEXT,
+            last_name TEXT,
+            username TEXT
         )
     ''')
     conn.commit()
@@ -100,37 +102,50 @@ def update_warnings(user_id, warnings):
     conn.commit()
     conn.close()
 
-def log_warning(user_id, warning_number, first_name, last_name, username):
+def log_warning(user_id, warning_number):
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
     timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
     c.execute('''
-        INSERT INTO warnings_history (user_id, first_name, last_name, username, warning_number, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?)
-    ''', (user_id, first_name, last_name, username, warning_number, timestamp))
+        INSERT INTO warnings_history (user_id, warning_number, timestamp)
+        VALUES (?, ?, ?)
+    ''', (user_id, warning_number, timestamp))
     conn.commit()
     conn.close()
 
 def load_admin_ids():
     try:
-        with open(TARA_ACCESS_FILE, 'r') as file:
+        with open('Tara_access.txt', 'r') as file:
             admin_ids = [int(line.strip()) for line in file if line.strip().isdigit()]
         return admin_ids
     except FileNotFoundError:
-        logger.error(f"{TARA_ACCESS_FILE} not found! Please create the file and add admin Telegram user IDs.")
+        logger.error("Tara_access.txt not found! Please create the file and add admin Telegram user IDs.")
         return []
     except ValueError as e:
         logger.error(f"Error parsing admin IDs: {e}")
         return []
 
-def save_admin_ids(admin_ids):
+def save_admin_id(new_admin_id):
     try:
-        with open(TARA_ACCESS_FILE, 'w') as file:
-            for admin_id in admin_ids:
-                file.write(f"{admin_id}\n")
-        logger.info("Admin IDs have been updated successfully.")
+        with open('Tara_access.txt', 'a') as file:
+            file.write(f"{new_admin_id}\n")
+        logger.info(f"Added new admin ID: {new_admin_id}")
     except Exception as e:
-        logger.error(f"Error saving admin IDs: {e}")
+        logger.error(f"Error saving new admin ID {new_admin_id}: {e}")
+
+def update_user_info(user):
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute('''
+        INSERT INTO users (user_id, first_name, last_name, username)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            first_name=excluded.first_name,
+            last_name=excluded.last_name,
+            username=excluded.username
+    ''', (user.id, user.first_name, user.last_name, user.username))
+    conn.commit()
+    conn.close()
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
@@ -142,6 +157,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if chat.type not in ['group', 'supergroup']:
         return
+
+    # Update user info in the database
+    update_user_info(user)
 
     if is_arabic(message.text):
         warnings = get_user_warnings(user.id) + 1
@@ -155,11 +173,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reason = "3- Third warning sent to the student. May be addressed to DISCIPLINARY COMMITTEE."
 
         update_warnings(user.id, warnings)
-        # Pass additional user information to log_warning
-        log_warning(user.id, warnings, user.first_name, user.last_name, user.username)
-
-        # Initialize flag to track if user is in bot
-        user_in_bot = False
+        log_warning(user.id, warnings)  # Log the warning with timestamp
 
         # Send private message with regulations
         try:
@@ -167,20 +181,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id=user.id,
                 text=alarm_message,
-                parse_mode=ParseMode.MARKDOWN
+                parse_mode='Markdown'
             )
             logger.info(f"Alarm message sent to user {user.id}.")
-            user_in_bot = True
         except Forbidden:
             logger.error("Cannot send private message to the user. They might not have started a conversation with the bot.")
-            
-            # **Notify admins that the user hasn't started the bot**
+
+            # **New Code: Notify admins that the user hasn't started the bot**
             admin_ids = load_admin_ids()
             if admin_ids:
-                username = f"@{user.username}" if user.username else f"{user.first_name} {user.last_name}".strip() or "N/A"
+                full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+                username = f"@{user.username}" if user.username else "NoUsername"
                 notification_message = (
                     f"⚠️ **Notification:**\n"
                     f"**User ID:** {user.id}\n"
+                    f"**Full Name:** {full_name if full_name else 'N/A'}\n"
                     f"**Username:** {username}\n"
                     f"**Issue:** The user has triggered a warning but hasn't started a private conversation with the bot.\n"
                     f"**Action Needed:** Please reach out to the user to ensure they start a conversation with the bot to receive warnings."
@@ -190,7 +205,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await context.bot.send_message(
                             chat_id=admin_id,
                             text=notification_message,
-                            parse_mode=ParseMode.MARKDOWN
+                            parse_mode='Markdown'
                         )
                         logger.info(f"Notification sent to admin {admin_id} about user {user.id} not starting the bot.")
                     except Forbidden:
@@ -198,14 +213,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except Exception as e:
                         logger.error(f"Error sending notification to admin ID {admin_id}: {e}")
             else:
-                logger.warning(f"No admin IDs found in {TARA_ACCESS_FILE} to notify about the user not starting the bot.")
+                logger.warning("No admin IDs found in Tara_access.txt to notify about the user not starting the bot.")
             
-            # Optionally, notify the group about the user not starting the bot
-            # Uncomment the following lines if desired
+            # Optionally, you can notify the group that the user hasn't started the bot
+            # Uncomment the following lines if you want to notify the group as well
             # try:
             #     await message.reply_text(
             #         f"⚠️ {user.mention_html()} has triggered a warning but hasn't started a private conversation with the bot. Please ensure they are aware of this requirement.",
-            #         parse_mode=ParseMode.HTML
+            #         parse_mode='HTML'
             #     )
             # except Exception as e:
             #     logger.error(f"Error notifying group about user {user.id}: {e}")
@@ -213,21 +228,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Error sending private message: {e}")
 
-        # Always send Alarm Report to admins
+        # Notify admins about the number of alarms
         admin_ids = load_admin_ids()
         if not admin_ids:
-            logger.warning(f"No admin IDs found in {TARA_ACCESS_FILE}.")
+            logger.warning("No admin IDs found in Tara_access.txt.")
             return
 
-        # Construct the alarm report message
-        username_display = f"@{user.username}" if user.username else f"{user.first_name} {user.last_name}".strip() or "N/A"
+        # Construct the alarm report message with full name and username
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        c.execute('SELECT first_name, last_name, username FROM users WHERE user_id = ?', (user.id,))
+        user_info = c.fetchone()
+        conn.close()
+
+        if user_info:
+            first_name, last_name, username = user_info
+            full_name = f"{first_name or ''} {last_name or ''}".strip()
+            username = f"@{username}" if username else "NoUsername"
+        else:
+            full_name = "N/A"
+            username = "NoUsername"
+
         alarm_report = (
             f"**Alarm Report**\n"
             f"**Student ID:** {user.id}\n"
-            f"**Username:** {username_display}\n"
+            f"**Full Name:** {full_name}\n"
+            f"**Username:** {username}\n"
             f"**Number of Alarms:** {warnings}\n"
-            f"**Date:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n"
-            f"**User in Bot:** {'Yes' if user_in_bot else 'No'}"
+            f"**Date:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
         )
 
         for admin_id in admin_ids:
@@ -235,7 +263,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(
                     chat_id=admin_id,
                     text=alarm_report,
-                    parse_mode=ParseMode.MARKDOWN
+                    parse_mode='Markdown'
                 )
                 logger.info(f"Alarm report sent to admin {admin_id}.")
             except Forbidden:
@@ -243,230 +271,117 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"Error sending message to admin ID {admin_id}: {e}")
 
-        # Optionally, log this event or save it to a file for auditing
+        # Optionally, you can log this event or save it to a file for auditing
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Bot is running.")
 
-# /tara command handler
-async def add_tara(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id != PRIMARY_ADMIN_ID:
-        await update.message.reply_text("You do not have permission to use this command.")
+# New Command: /set <user_id> <number>
+async def set_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != SUPER_ADMIN_ID:
+        await update.message.reply_text("You don't have permission to use this command.")
+        logger.warning(f"Unauthorized access attempt to /set by user {user.id}.")
         return
 
-    if len(context.args) != 1:
-        await update.message.reply_text("Usage: /tara <user_id>")
+    args = context.args
+    if len(args) != 2:
+        await update.message.reply_text("Usage: /set <user_id> <number>")
         return
 
     try:
-        new_tara_id = int(context.args[0])
+        target_user_id = int(args[0])
+        new_warnings = int(args[1])
     except ValueError:
-        await update.message.reply_text("Please provide a valid numeric user ID.")
+        await update.message.reply_text("Both user_id and number must be integers.")
+        return
+
+    if new_warnings < 0:
+        await update.message.reply_text("Number of warnings cannot be negative.")
+        return
+
+    update_warnings(target_user_id, new_warnings)
+    log_warning(target_user_id, new_warnings)  # Log the update as a warning for tracking
+
+    await update.message.reply_text(f"Set {new_warnings} warnings for user ID {target_user_id}.")
+    logger.info(f"Set {new_warnings} warnings for user ID {target_user_id} by admin {user.id}.")
+
+# New Command: /tara <admin_id>
+async def add_tara_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != SUPER_ADMIN_ID:
+        await update.message.reply_text("You don't have permission to use this command.")
+        logger.warning(f"Unauthorized access attempt to /tara by user {user.id}.")
+        return
+
+    args = context.args
+    if len(args) != 1:
+        await update.message.reply_text("Usage: /tara <admin_id>")
+        return
+
+    try:
+        new_admin_id = int(args[0])
+    except ValueError:
+        await update.message.reply_text("admin_id must be an integer.")
         return
 
     admin_ids = load_admin_ids()
-    if new_tara_id in admin_ids:
-        await update.message.reply_text("This user is already a TARA.")
+    if new_admin_id in admin_ids:
+        await update.message.reply_text(f"User ID {new_admin_id} is already an admin.")
         return
 
-    admin_ids.append(new_tara_id)
-    save_admin_ids(admin_ids)
-    await update.message.reply_text(f"User ID {new_tara_id} has been added as a TARA.")
-    logger.info(f"User ID {new_tara_id} added as TARA by {user_id}.")
+    save_admin_id(new_admin_id)
+    await update.message.reply_text(f"Added user ID {new_admin_id} as a Tara admin.")
+    logger.info(f"Added new Tara admin ID {new_admin_id} by super admin {user.id}.")
 
-# /rmove command handler
-async def remove_tara(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id != PRIMARY_ADMIN_ID:
-        await update.message.reply_text("You do not have permission to use this command.")
-        return
-
-    if len(context.args) != 1:
-        await update.message.reply_text("Usage: /rmove <user_id>")
-        return
-
-    try:
-        tara_id = int(context.args[0])
-    except ValueError:
-        await update.message.reply_text("Please provide a valid numeric user ID.")
-        return
-
+# New Command: /info
+async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
     admin_ids = load_admin_ids()
-    if tara_id not in admin_ids:
-        await update.message.reply_text("This user is not a TARA.")
+    if user.id not in admin_ids:
+        await update.message.reply_text("You don't have permission to use this command.")
+        logger.warning(f"Unauthorized access attempt to /info by user {user.id}.")
         return
 
-    admin_ids.remove(tara_id)
-    save_admin_ids(admin_ids)
-    await update.message.reply_text(f"User ID {tara_id} has been removed from TARA.")
-    logger.info(f"User ID {tara_id} removed from TARA by {user_id}.")
-
-# /information command handler
-async def information(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    admin_ids = load_admin_ids()
-    if user_id not in admin_ids:
-        await update.message.reply_text("You do not have permission to use this command.")
-        return
-
-    conn = sqlite3.connect(DATABASE)
-    c = conn.cursor()
-    c.execute('SELECT user_id, warnings FROM warnings')
-    users = c.fetchall()
-    conn.close()
-
-    if not users:
-        await update.message.reply_text("No users have received warnings yet.")
-        return
-
-    report_lines = ["**Warnings Report:**\n"]
-    for uid, warns in users:
-        # Fetch latest warning details
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
-        c.execute('''
-            SELECT first_name, last_name, username, timestamp FROM warnings_history 
-            WHERE user_id = ? 
-            ORDER BY id DESC 
-            LIMIT 1
-        ''', (uid,))
-        row = c.fetchone()
-        conn.close()
-
-        if row:
-            first_name, last_name, username, last_warning = row
-            full_name = f"{first_name} {last_name}".strip()
-            username_display = f"@{username}" if username else full_name if full_name else "N/A"
-        else:
-            username_display = "N/A"
-            last_warning = "N/A"
-
-        report_lines.append(
-            f"**Id:** {uid}\n"
-            f"**Username:** {username_display}\n"
-            f"**Warning number:** {warns}\n"
-            f"**Date:** {last_warning} UTC\n"
-        )
-
-    report = "\n".join(report_lines)
-    try:
-        await context.bot.send_message(
-            chat_id=user_id,
-            text=report,
-            parse_mode=ParseMode.MARKDOWN
-        )
-        logger.info(f"Warnings report sent to TARA {user_id}.")
-    except Forbidden:
-        logger.error(f"Cannot send warnings report to TARA {user_id}. They might have blocked the bot.")
-    except Exception as e:
-        logger.error(f"Error sending warnings report to TARA {user_id}: {e}")
-
-# /set command handler - starts the conversation
-async def set_warning_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id != PRIMARY_ADMIN_ID:
-        await update.message.reply_text("You do not have permission to use this command.")
-        return ConversationHandler.END
-
-    if len(context.args) != 1:
-        await update.message.reply_text("Usage: /set <user_id>")
-        return ConversationHandler.END
-
-    try:
-        target_user_id = int(context.args[0])
-    except ValueError:
-        await update.message.reply_text("Please provide a valid numeric user ID.")
-        return ConversationHandler.END
-
-    context.user_data['target_user_id'] = target_user_id
-    await update.message.reply_text("Please enter the number of warnings to set:")
-    return SET_WARNING
-
-# /set command handler - receives the number of warnings
-async def set_warning_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        warnings = int(update.message.text.strip())
-        if warnings < 0:
-            raise ValueError
-    except ValueError:
-        await update.message.reply_text("Please enter a valid non-negative integer for warnings.")
-        return SET_WARNING
-
-    context.user_data['set_warnings'] = warnings
-    target_user_id = context.user_data['target_user_id']
-    
-    # Fetch user information from warnings_history
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
     c.execute('''
-        SELECT first_name, last_name, username FROM warnings_history 
-        WHERE user_id = ? 
-        ORDER BY id DESC 
-        LIMIT 1
-    ''', (target_user_id,))
-    row = c.fetchone()
+        SELECT w.user_id, u.first_name, u.last_name, u.username, w.warnings
+        FROM warnings w
+        JOIN users u ON w.user_id = u.user_id
+        WHERE w.warnings > 0
+        ORDER BY w.warnings DESC
+    ''')
+    rows = c.fetchall()
     conn.close()
 
-    if row:
-        first_name, last_name, username = row
-        full_name = f"{first_name} {last_name}".strip()
-        username_display = f"@{username}" if username else full_name if full_name else "N/A"
-    else:
-        username_display = "N/A"
+    if not rows:
+        await update.message.reply_text("No users have received warnings yet.")
+        return
 
-    confirmation_message = (
-        f"Are you sure you want to set **{warnings}** warnings for the following user?\n\n"
-        f"**Id:** {target_user_id}\n"
-        f"**Username:** {username_display}"
-    )
-    # Create inline keyboard for confirmation
-    keyboard = [
-        [
-            InlineKeyboardButton("Confirm", callback_data='confirm_set_warning'),
-            InlineKeyboardButton("Cancel", callback_data='cancel_set_warning')
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(confirmation_message, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
-    return CONFIRM_WARNING
+    info_message = "**Users with Warnings:**\n"
+    for row in rows:
+        user_id, first_name, last_name, username, warnings = row
+        full_name = f"{first_name or ''} {last_name or ''}".strip() or "N/A"
+        username = f"@{username}" if username else "NoUsername"
+        info_message += (
+            f"• **User ID:** {user_id}\n"
+            f"  **Full Name:** {full_name}\n"
+            f"  **Username:** {username}\n"
+            f"  **Warnings:** {warnings}\n\n"
+        )
 
-# /set command handler - confirms or cancels the setting
-async def set_warning_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if query.data == 'confirm_set_warning':
-        target_user_id = context.user_data['target_user_id']
-        warnings = context.user_data['set_warnings']
-        update_warnings(target_user_id, warnings)
-        # Log the warning with timestamp (assuming the user has some details)
-        # Attempt to fetch user details from warnings_history
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
-        c.execute('''
-            SELECT first_name, last_name, username FROM warnings_history 
-            WHERE user_id = ? 
-            ORDER BY id DESC 
-            LIMIT 1
-        ''', (target_user_id,))
-        row = c.fetchone()
-        conn.close()
-
-        if row:
-            first_name, last_name, username = row
+    try:
+        # Telegram has a message length limit, so it's good to check and split if necessary
+        if len(info_message) > 4000:
+            # Split the message into chunks
+            for i in range(0, len(info_message), 4000):
+                await update.message.reply_text(info_message[i:i+4000], parse_mode='Markdown')
         else:
-            first_name, last_name, username = None, None, None
-
-        log_warning(target_user_id, warnings, first_name, last_name, username)
-        await query.edit_message_text(f"Set {warnings} warnings for user ID {target_user_id}.")
-        logger.info(f"Set {warnings} warnings for user ID {target_user_id} by {update.effective_user.id}.")
-    else:
-        await query.edit_message_text("Setting warnings canceled.")
-    return ConversationHandler.END
-
-def cancel_set_warning(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    update.message.reply_text("Setting warnings canceled.")
-    return ConversationHandler.END
+            await update.message.reply_text(info_message, parse_mode='Markdown')
+        logger.info(f"Info command used by admin {user.id}.")
+    except Exception as e:
+        logger.error(f"Error sending info message: {e}")
 
 def main():
     init_db()
@@ -484,24 +399,14 @@ def main():
 
     application = ApplicationBuilder().token(TOKEN).build()
 
-    # Handlers
+    # Existing handlers
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("tara", add_tara))
-    application.add_handler(CommandHandler("rmove", remove_tara))
-    application.add_handler(CommandHandler("information", information))
-
-    # ConversationHandler for /set command
-    set_warning_conv = ConversationHandler(
-        entry_points=[CommandHandler('set', set_warning_start)],
-        states={
-            SET_WARNING: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_warning_number)],
-            CONFIRM_WARNING: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_warning_confirm)],
-        },
-        fallbacks=[CommandHandler('cancel', cancel_set_warning)],
-    )
-    application.add_handler(set_warning_conv)
-
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # New handlers
+    application.add_handler(CommandHandler("set", set_warnings))
+    application.add_handler(CommandHandler("tara", add_tara_admin))
+    application.add_handler(CommandHandler("info", info))
 
     application.run_polling()
 
