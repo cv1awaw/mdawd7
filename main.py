@@ -228,7 +228,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"Alarm message sent to user {user.id}.")
         except Forbidden:
             logger.error("Cannot send private message to the user. They might not have started a conversation with the bot.")
-            
+
             # **Notify Admins that the user hasn't started the bot**
             admin_ids = load_admin_ids()
             if admin_ids:
@@ -402,6 +402,9 @@ async def receive_group_tara_id(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("An error occurred while adding the group.")
         logger.error(f"Error adding group: {e}")
 
+    # **Send Confirmation Message**
+    await update.message.reply_text("Group saved.")
+
     return ConversationHandler.END
 
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -430,6 +433,19 @@ async def tara_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("An error occurred while adding the admin.")
         logger.error(f"Error adding admin: {e}")
 
+    # **Optional: Notify the Tara that they've been added as an admin**
+    try:
+        await context.bot.send_message(
+            chat_id=tara_id,
+            text="⚠️ You have been added as an admin (Tara) for managing groups.",
+            parse_mode='Markdown'
+        )
+        logger.info(f"Notification sent to Tara {tara_id} about being added as admin.")
+    except Forbidden:
+        logger.error(f"Cannot send message to Tara ID {tara_id}. They might not have started a conversation with the bot.")
+    except Exception as e:
+        logger.error(f"Error sending notification to Tara ID {tara_id}: {e}")
+
 # Command handler for removing Tara (admin)
 async def remove_tara_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -451,6 +467,19 @@ async def remove_tara_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         await update.message.reply_text("An error occurred while removing the admin.")
         logger.error(f"Error removing admin: {e}")
+
+    # **Optional: Notify the Tara that they've been removed as an admin**
+    try:
+        await context.bot.send_message(
+            chat_id=tara_id,
+            text="⚠️ You have been removed from admin (Tara) roles.",
+            parse_mode='Markdown'
+        )
+        logger.info(f"Notification sent to Tara {tara_id} about being removed as admin.")
+    except Forbidden:
+        logger.error(f"Cannot send message to Tara ID {tara_id}. They might have blocked the bot.")
+    except Exception as e:
+        logger.error(f"Error sending notification to Tara ID {tara_id}: {e}")
 
 # Command handler for removing a group
 async def remove_group_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -616,49 +645,9 @@ async def receive_group_name_for_add_group(update: Update, context: ContextTypes
     except Exception as e:
         await update.message.reply_text("An error occurred while adding the group.")
         logger.error(f"Error adding group: {e}")
-    return ConversationHandler.END
-
-# Conversation handler for adding a group via /add_group
-add_group_conv_handler_manual = ConversationHandler(
-    entry_points=[CommandHandler('add_group', add_group_command_manual)],
-    states={
-        ADD_GROUP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_name_for_add_group)],
-    },
-    fallbacks=[CommandHandler('cancel', cancel_conversation)],
-    allow_reentry=True,
-)
-
-# Conversation handler for adding a group via /add <tara_id>
-async def receive_group_name_for_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    group_name = update.message.text.strip()
-    if not group_name:
-        await update.message.reply_text("Group name cannot be empty. Please provide a valid name.")
-        return GROUP_NAME
-    context.user_data['group_name'] = group_name
-    await update.message.reply_text("Please provide a custom ID for this group.")
-    return GROUP_CUSTOM_ID
-
-async def receive_group_custom_id_for_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    group_custom_id = update.message.text.strip()
-    if not group_custom_id:
-        await update.message.reply_text("Group custom ID cannot be empty. Please provide a valid custom ID.")
-        return GROUP_CUSTOM_ID
-
-    group_id = context.user_data['group_id']
-    group_name = context.user_data['group_name']
-    tara_id = context.user_data['add_group_tara_id']
-
-    # Save to database
-    try:
-        add_group_to_db(group_id, group_name, group_custom_id, tara_id)
-        await update.message.reply_text(f"Group '{group_name}' with custom ID '{group_custom_id}' has been added successfully and associated with Tara ID {tara_id}.")
-        logger.info(f"Added group: ID={group_id}, Name={group_name}, Custom ID={group_custom_id}, Associated Tara ID={tara_id}")
-    except sqlite3.IntegrityError:
-        await update.message.reply_text("This group is already registered.")
-        logger.warning(f"Attempted to add an existing group: ID={group_id}")
-    except Exception as e:
-        await update.message.reply_text("An error occurred while adding the group.")
-        logger.error(f"Error adding group: {e}")
+    
+    # **Send Confirmation Message**
+    await update.message.reply_text("Group saved.")
 
     return ConversationHandler.END
 
@@ -668,6 +657,16 @@ add_group_conv_handler = ConversationHandler(
     states={
         GROUP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_name_for_add)],
         GROUP_CUSTOM_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_custom_id_for_add)],
+    },
+    fallbacks=[CommandHandler('cancel', cancel_conversation)],
+    allow_reentry=True,
+)
+
+# Conversation handler for adding a group via /add_group
+add_group_conv_handler_manual = ConversationHandler(
+    entry_points=[CommandHandler('add_group', add_group_command_manual)],
+    states={
+        ADD_GROUP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_name_for_add_group)],
     },
     fallbacks=[CommandHandler('cancel', cancel_conversation)],
     allow_reentry=True,
