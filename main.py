@@ -18,7 +18,7 @@ from telegram.error import Forbidden, BadRequest
 GROUP_NAME, GROUP_CUSTOM_ID, CHANGE_NAME, ADD_GROUP_NAME = range(4)
 
 DATABASE = 'warnings.db'
-AUTHORIZED_USER_ID = 6177929931  # Only this user can execute admin commands
+AUTHORIZED_USER_ID = 6177929931  # Replace with your Telegram user ID
 
 REGULATIONS_MESSAGE = """
 **Communication Channels Regulation**
@@ -41,21 +41,22 @@ Please note that not complying with the above-mentioned regulation will result i
 # Configure logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.INFO  # Change to DEBUG for more detailed logs
 )
 logger = logging.getLogger(__name__)
 
 def init_db():
+    """Initialize the SQLite database and create necessary tables."""
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
-    # Existing warnings table
+    # Table to track user warnings
     c.execute('''
         CREATE TABLE IF NOT EXISTS warnings (
             user_id INTEGER PRIMARY KEY,
             warnings INTEGER NOT NULL DEFAULT 0
         )
     ''')
-    # New warnings_history table
+    # Table to log warning history
     c.execute('''
         CREATE TABLE IF NOT EXISTS warnings_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,7 +66,7 @@ def init_db():
             FOREIGN KEY(user_id) REFERENCES warnings(user_id)
         )
     ''')
-    # Updated groups table with admin_id (nullable)
+    # Table to manage groups and their associated Taras (admins)
     c.execute('''
         CREATE TABLE IF NOT EXISTS groups (
             group_id INTEGER PRIMARY KEY,
@@ -75,7 +76,7 @@ def init_db():
             FOREIGN KEY(admin_id) REFERENCES admins(user_id)
         )
     ''')
-    # New admins table
+    # Table to manage admin (Taras) user IDs
     c.execute('''
         CREATE TABLE IF NOT EXISTS admins (
             user_id INTEGER PRIMARY KEY
@@ -85,9 +86,11 @@ def init_db():
     conn.close()
 
 def is_arabic(text):
+    """Check if the text contains Arabic characters."""
     return bool(re.search(r'[\u0600-\u06FF]', text))
 
 def get_user_warnings(user_id):
+    """Retrieve the current warning count for a user."""
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
     c.execute('SELECT warnings FROM warnings WHERE user_id = ?', (user_id,))
@@ -99,6 +102,7 @@ def get_user_warnings(user_id):
     return 0
 
 def update_warnings(user_id, warnings):
+    """Update the warning count for a user."""
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
     c.execute('''
@@ -111,6 +115,7 @@ def update_warnings(user_id, warnings):
     conn.close()
 
 def log_warning(user_id, warning_number):
+    """Log the warning event with a timestamp."""
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
     timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
@@ -122,6 +127,7 @@ def log_warning(user_id, warning_number):
     conn.close()
 
 def load_admin_ids():
+    """Load all admin (Tara) user IDs from the database."""
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
@@ -135,6 +141,7 @@ def load_admin_ids():
         return []
 
 def add_admin(user_id):
+    """Add an admin (Tara) to the database."""
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
     c.execute('INSERT OR IGNORE INTO admins (user_id) VALUES (?)', (user_id,))
@@ -142,6 +149,7 @@ def add_admin(user_id):
     conn.close()
 
 def remove_admin(user_id):
+    """Remove an admin (Tara) from the database."""
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
     c.execute('DELETE FROM admins WHERE user_id = ?', (user_id,))
@@ -149,9 +157,11 @@ def remove_admin(user_id):
     conn.close()
 
 def is_authorized(user_id):
+    """Check if the user is authorized to execute admin commands."""
     return user_id == AUTHORIZED_USER_ID
 
 def add_group_to_db(group_id, name, group_custom_id=None, admin_id=None):
+    """Add a group to the database with optional custom ID and associated admin (Tara)."""
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
     c.execute('''
@@ -162,6 +172,7 @@ def add_group_to_db(group_id, name, group_custom_id=None, admin_id=None):
     conn.close()
 
 def remove_group_from_db(group_id):
+    """Remove a group from the database."""
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
     c.execute('DELETE FROM groups WHERE group_id = ?', (group_id,))
@@ -169,6 +180,7 @@ def remove_group_from_db(group_id):
     conn.close()
 
 def change_group_name_in_db(group_id, new_name):
+    """Change the name of a group in the database."""
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
     c.execute('UPDATE groups SET name = ? WHERE group_id = ?', (new_name, group_id))
@@ -176,6 +188,7 @@ def change_group_name_in_db(group_id, new_name):
     conn.close()
 
 def get_group_from_db(group_id):
+    """Retrieve group information from the database."""
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
     c.execute('SELECT name, group_custom_id, admin_id FROM groups WHERE group_id = ?', (group_id,))
@@ -184,6 +197,7 @@ def get_group_from_db(group_id):
     return row
 
 def get_groups_by_admin(admin_id):
+    """Retrieve all groups associated with a specific admin (Tara)."""
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
     c.execute('SELECT group_id, name, group_custom_id FROM groups WHERE admin_id = ?', (admin_id,))
@@ -191,8 +205,8 @@ def get_groups_by_admin(admin_id):
     conn.close()
     return rows
 
-# Function to handle all messages in groups
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle all incoming messages in groups."""
     message = update.message
     if not message or not message.text:
         return  # Ignore non-text messages
@@ -265,6 +279,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         group_name, group_custom_id, admin_id = group_info
+        logger.debug(f"Group Info - Name: {group_name}, Custom ID: {group_custom_id}, Admin ID: {admin_id}")
 
         # Construct the alarm report message
         username = f"@{user.username}" if user.username else "NoUsername"
@@ -275,8 +290,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             user_private = await context.bot.get_chat(user.id)
             has_started = True
+            logger.debug(f"User {user.id} has started a private chat with the bot.")
         except Forbidden:
             has_started = False
+            logger.debug(f"User {user.id} has NOT started a private chat with the bot.")
 
         if not has_started:
             private_info = "⚠️ **Note:** The user hasn't started a private conversation with the bot."
@@ -292,13 +309,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"**Date:** {date_time}\n"
             f"{private_info}"
         )
+        logger.debug(f"Constructed Alarm Report: {alarm_report}")
 
         # Fetch all groups associated with the Tara (admin_id)
         if admin_id:
             tara_groups = get_groups_by_admin(admin_id)
+            logger.debug(f"Tara ID {admin_id} manages {len(tara_groups)} group(s).")
 
             for tara_group in tara_groups:
                 tara_group_id, tara_group_name, tara_group_custom_id = tara_group
+                logger.debug(f"Attempting to send alarm report to Tara's group ID {tara_group_id}.")
+
                 try:
                     await context.bot.send_message(
                         chat_id=tara_group_id,
@@ -606,14 +627,87 @@ async def remove_group_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # Function to cancel conversations
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel any ongoing conversation."""
     await update.message.reply_text("Operation cancelled.")
     return ConversationHandler.END
 
 # Command handler for starting the bot
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the /start command."""
     await update.message.reply_text("Bot is running.")
 
+# Command handler to list all groups and their associated Taras
+async def list_groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all groups and their associated Taras."""
+    user = update.effective_user
+    if not is_authorized(user.id):
+        await update.message.reply_text("You are not authorized to use this command.")
+        return
+
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute('''
+        SELECT g.group_id, g.name, a.user_id
+        FROM groups g
+        LEFT JOIN admins a ON g.admin_id = a.user_id
+    ''')
+    rows = c.fetchall()
+    conn.close()
+
+    if not rows:
+        await update.message.reply_text("No groups found in the database.")
+        return
+
+    message = "**List of Groups and Their Associated Taras:**\n\n"
+    for row in rows:
+        group_id, group_name, admin_id = row
+        if admin_id:
+            message += f"📌 **Group ID:** {group_id}\n"
+            message += f"**Group Name:** {group_name}\n"
+            message += f"**Associated Tara ID:** {admin_id}\n\n"
+        else:
+            message += f"📌 **Group ID:** {group_id}\n"
+            message += f"**Group Name:** {group_name}\n"
+            message += f"**Associated Tara ID:** None\n\n"
+
+    await update.message.reply_text(message, parse_mode='Markdown')
+    logger.debug("Executed /list_groups command.")
+
+async def send_test_alarm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send a test alarm report to a specified Tara's group."""
+    user = update.effective_user
+    if not is_authorized(user.id):
+        await update.message.reply_text("You are not authorized to use this command.")
+        return
+
+    # Replace with an actual group ID associated with a Tara
+    tara_group_id = -1001234567890  # Example Group ID
+    alarm_report = (
+        f"**Test Alarm Report**\n"
+        f"**Student ID:** 999999999\n"
+        f"**Username:** @testuser\n"
+        f"**Account Name:** Test User\n"
+        f"**Number of Alarms:** 1\n"
+        f"**Date:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
+    )
+
+    try:
+        await context.bot.send_message(
+            chat_id=tara_group_id,
+            text=alarm_report,
+            parse_mode='Markdown'
+        )
+        await update.message.reply_text("Test alarm report sent successfully.")
+        logger.debug(f"Test alarm report sent to Tara's group {tara_group_id}.")
+    except Forbidden:
+        await update.message.reply_text(f"Cannot send message to Tara's group ID {tara_group_id}.")
+        logger.error(f"Cannot send message to Tara's group ID {tara_group_id}.")
+    except Exception as e:
+        await update.message.reply_text(f"An error occurred: {e}")
+        logger.error(f"Error sending test alarm report to Tara's group ID {tara_group_id}: {e}")
+
 def main():
+    """Main function to start the bot."""
     init_db()
     TOKEN = os.getenv('BOT_TOKEN')
     if not TOKEN:
@@ -631,6 +725,8 @@ def main():
 
     # Handlers for existing functionalities
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("list_groups", list_groups_command))
+    application.add_handler(CommandHandler("send_test_alarm", send_test_alarm))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # Admin command handlers
@@ -659,6 +755,7 @@ def main():
         allow_reentry=True,
     ))
 
+    # Start the bot
     application.run_polling()
 
 if __name__ == '__main__':
