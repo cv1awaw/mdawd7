@@ -15,7 +15,7 @@ from telegram.ext import (
 from telegram.error import Forbidden, BadRequest
 
 # Constants for Conversation States
-GROUP_NAME, GROUP_CUSTOM_ID, GROUP_TARA_ID, CHANGE_NAME, ADD_GROUP_NAME = range(5)
+GROUP_NAME, GROUP_CUSTOM_ID, CHANGE_NAME, ADD_GROUP_NAME = range(4)
 
 DATABASE = 'warnings.db'
 AUTHORIZED_USER_ID = 6177929931  # Only this user can execute admin commands
@@ -191,7 +191,6 @@ def get_groups_by_admin(admin_id):
     conn.close()
     return rows
 
-# Function to handle all messages in groups
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message or not message.text:
@@ -637,7 +636,7 @@ def main():
     application.add_handler(CommandHandler("tara", tara_command))
     application.add_handler(CommandHandler("remove", remove_tara_command))
     application.add_handler(CommandHandler("remove_group", remove_group_command))
-    application.add_handler(CommandHandler("change", change_group_command))
+    application.add_handler(CommandHandler("change", change_group_conv_handler))
 
     # Conversation handlers
     application.add_handler(ConversationHandler(
@@ -645,7 +644,6 @@ def main():
         states={
             GROUP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_name_for_add_group)],
             GROUP_CUSTOM_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_custom_id_for_add)],
-            GROUP_TARA_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_tara_id)],
         },
         fallbacks=[CommandHandler('cancel', cancel_conversation)],
         allow_reentry=True,
@@ -660,14 +658,7 @@ def main():
         allow_reentry=True,
     ))
 
-    application.add_handler(ConversationHandler(
-        entry_points=[CommandHandler('change', change_group_command)],
-        states={
-            CHANGE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_new_group_name)],
-        },
-        fallbacks=[CommandHandler('cancel', cancel_conversation)],
-        allow_reentry=True,
-    ))
+    application.add_handler(change_group_conv_handler)
 
     application.run_polling()
 
