@@ -58,11 +58,14 @@ def init_db():
             warnings INTEGER NOT NULL DEFAULT 0
         )
     ''')
-    # New warnings_history table
+    # Updated warnings_history table with additional user details
     c.execute('''
         CREATE TABLE IF NOT EXISTS warnings_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
+            first_name TEXT,
+            last_name TEXT,
+            username TEXT,
             warning_number INTEGER NOT NULL,
             timestamp TEXT NOT NULL,
             FOREIGN KEY(user_id) REFERENCES warnings(user_id)
@@ -97,14 +100,14 @@ def update_warnings(user_id, warnings):
     conn.commit()
     conn.close()
 
-def log_warning(user_id, warning_number):
+def log_warning(user_id, warning_number, first_name, last_name, username):
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
     timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
     c.execute('''
-        INSERT INTO warnings_history (user_id, warning_number, timestamp)
-        VALUES (?, ?, ?)
-    ''', (user_id, warning_number, timestamp))
+        INSERT INTO warnings_history (user_id, first_name, last_name, username, warning_number, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (user_id, first_name, last_name, username, warning_number, timestamp))
     conn.commit()
     conn.close()
 
@@ -152,7 +155,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reason = "3- Third warning sent to the student. May be addressed to DISCIPLINARY COMMITTEE."
 
         update_warnings(user.id, warnings)
-        log_warning(user.id, warnings)  # Log the warning with timestamp
+        # Pass additional user information to log_warning
+        log_warning(user.id, warnings, user.first_name, user.last_name, user.username)
 
         # Send private message with regulations
         try:
@@ -169,11 +173,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # **New Code: Notify admins that the user hasn't started the bot**
             admin_ids = load_admin_ids()
             if admin_ids:
-                username = f"@{user.username}" if user.username else user.full_name
+                username = f"@{user.username}" if user.username else f"{user.first_name} {user.last_name}".strip()
                 notification_message = (
                     f"⚠️ **Notification:**\n"
                     f"**User ID:** {user.id}\n"
-                    f"**Username:** {username}\n"
+                    f"**Username:** {username if username else 'N/A'}\n"
                     f"**Issue:** The user has triggered a warning but hasn't started a private conversation with the bot.\n"
                     f"**Action Needed:** Please reach out to the user to ensure they start a conversation with the bot to receive warnings."
                 )
@@ -212,11 +216,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # Construct the alarm report message
-        username = f"@{user.username}" if user.username else user.full_name
+        username = f"@{user.username}" if user.username else f"{user.first_name} {user.last_name}".strip()
         alarm_report = (
             f"**Alarm Report**\n"
             f"**Student ID:** {user.id}\n"
-            f"**Username:** {username}\n"
+            f"**Username:** {username if username else 'N/A'}\n"
             f"**Number of Alarms:** {warnings}\n"
             f"**Date:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
         )
@@ -313,28 +317,29 @@ async def information(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     report_lines = ["**Warnings Report:**\n"]
     for uid, warns in users:
-        try:
-            user = await context.bot.get_chat(uid)
-            username = f"@{user.username}" if user.username else user.full_name
-        except Exception:
-            username = "Unknown"
-
-        # Fetch latest warning date
+        # Fetch latest warning details
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
         c.execute('''
-            SELECT timestamp FROM warnings_history 
+            SELECT first_name, last_name, username, timestamp FROM warnings_history 
             WHERE user_id = ? 
             ORDER BY id DESC 
             LIMIT 1
         ''', (uid,))
         row = c.fetchone()
         conn.close()
-        last_warning = row[0] if row else "N/A"
+
+        if row:
+            first_name, last_name, username, last_warning = row
+            full_name = f"{first_name} {last_name}".strip()
+            username_display = f"@{username}" if username else full_name if full_name else "N/A"
+        else:
+            username_display = "N/A"
+            last_warning = "N/A"
 
         report_lines.append(
             f"**Id:** {uid}\n"
-            f"**Username:** {username}\n"
+            f"**Username:** {username_display}\n"
             f"**Warning number:** {warns}\n"
             f"**Date:** {last_warning} UTC\n"
         )
@@ -386,17 +391,29 @@ async def set_warning_number(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data['set_warnings'] = warnings
     target_user_id = context.user_data['target_user_id']
     
-    # Fetch user information
-    try:
-        user = await context.bot.get_chat(target_user_id)
-        username = f"@{user.username}" if user.username else user.full_name
-    except Exception:
-        username = "Unknown"
+    # Fetch user information from warnings_history
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute('''
+        SELECT first_name, last_name, username FROM warnings_history 
+        WHERE user_id = ? 
+        ORDER BY id DESC 
+        LIMIT 1
+    ''', (target_user_id,))
+    row = c.fetchone()
+    conn.close()
+
+    if row:
+        first_name, last_name, username = row
+        full_name = f"{first_name} {last_name}".strip()
+        username_display = f"@{username}" if username else full_name if full_name else "N/A"
+    else:
+        username_display = "N/A"
 
     confirmation_message = (
-        f"Are you sure you want to set {warnings} warnings for the following user?\n\n"
+        f"Are you sure you want to set **{warnings}** warnings for the following user?\n\n"
         f"**Id:** {target_user_id}\n"
-        f"**Username:** {username}"
+        f"**Username:** {username_display}"
     )
     # Create inline keyboard for confirmation
     keyboard = [
@@ -417,7 +434,15 @@ async def set_warning_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE
         target_user_id = context.user_data['target_user_id']
         warnings = context.user_data['set_warnings']
         update_warnings(target_user_id, warnings)
-        log_warning(target_user_id, warnings)
+        # Optionally, fetch and update the latest warning in warnings_history
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        c.execute('''
+            INSERT INTO warnings_history (user_id, warning_number, timestamp)
+            VALUES (?, ?, ?)
+        ''', (target_user_id, warnings, datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')))
+        conn.commit()
+        conn.close()
         await query.edit_message_text(f"Set {warnings} warnings for user ID {target_user_id}.")
         logger.info(f"Set {warnings} warnings for user ID {target_user_id} by {update.effective_user.id}.")
     else:
