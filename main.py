@@ -344,6 +344,8 @@ async def add_tara_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Added new Tara admin ID {new_admin_id} by super admin {user.id}.")
 
 # Enhanced Command: /info
+from telegram.helpers import escape_markdown
+
 async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Provide information about all users who have received warnings. Accessible by Tara admins."""
     user = update.effective_user
@@ -370,17 +372,17 @@ async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Initialize the info message
-    info_message = "**Users with Warnings:**\n\n"
+    info_message = "*Users with Warnings:*\n\n"
 
     for row in rows:
         user_id, first_name, last_name, username, warnings = row
-        full_name = f"{first_name or ''} {last_name or ''}".strip() or "N/A"
-        username_display = f"@{username}" if username else "NoUsername"
+        full_name = escape_markdown(f"{first_name or ''} {last_name or ''}".strip() or "N/A", version=2)
+        username_display = f"@{escape_markdown(username, version=2)}" if username else "NoUsername"
         info_message += (
-            f"• **User ID:** {user_id}\n"
-            f"  **Full Name:** {full_name}\n"
-            f"  **Username:** {username_display}\n"
-            f"  **Warnings:** {warnings}\n\n"
+            f"• *User ID:* `{user_id}`\n"
+            f"  *Full Name:* {full_name}\n"
+            f"  *Username:* {username_display}\n"
+            f"  *Warnings:* `{warnings}`\n\n"
         )
 
     try:
@@ -388,14 +390,14 @@ async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(info_message) > 4000:
             # Split the message into chunks of 4000 characters
             for i in range(0, len(info_message), 4000):
-                await update.message.reply_text(info_message[i:i+4000], parse_mode='Markdown')
+                await update.message.reply_text(info_message[i:i+4000], parse_mode='MarkdownV2')
         else:
-            await update.message.reply_text(info_message, parse_mode='Markdown')
+            await update.message.reply_text(info_message, parse_mode='MarkdownV2')
         logger.info(f"Info command used by admin {user.id}.")
     except Exception as e:
         logger.error(f"Error sending info message: {e}")
         await update.message.reply_text("An error occurred while generating the info report.")
-
+        
 def main():
     """Initialize the bot and add handlers."""
     init_db()
