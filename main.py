@@ -3,7 +3,7 @@ import re
 import sqlite3
 import logging
 from datetime import datetime
-from telegram import Update, ForceReply
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,
@@ -17,6 +17,7 @@ from telegram.error import Forbidden, BadRequest
 # ------------------ Constants ------------------
 
 DATABASE = 'warnings.db'
+TARA_ACCESS_FILE = 'Tara_access.txt'  # File containing admin IDs
 
 REGULATIONS_MESSAGE = """
 **Communication Channels Regulation**
@@ -38,10 +39,10 @@ Please note that not complying with the above-mentioned regulation will result i
 
 # ------------------ Setup Logging ------------------
 
-# Enable logging
+# Configure logging to include timestamps and log levels
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO  # Changed to INFO to reduce verbosity
+    level=logging.INFO  # Change to DEBUG for more detailed logs
 )
 logger = logging.getLogger(__name__)
 
@@ -51,14 +52,14 @@ def init_db():
     """Initialize the SQLite database with necessary tables."""
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
-    # Existing warnings table
+    # Table to store warnings count per user
     c.execute('''
         CREATE TABLE IF NOT EXISTS warnings (
             user_id INTEGER PRIMARY KEY,
             warnings INTEGER NOT NULL DEFAULT 0
         )
     ''')
-    # New warnings_history table
+    # Table to log warning history with timestamps
     c.execute('''
         CREATE TABLE IF NOT EXISTS warnings_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -68,7 +69,7 @@ def init_db():
             FOREIGN KEY(user_id) REFERENCES warnings(user_id)
         )
     ''')
-    # New groups table
+    # Table to store registered groups
     c.execute('''
         CREATE TABLE IF NOT EXISTS groups (
             group_id INTEGER PRIMARY KEY,
@@ -125,12 +126,12 @@ def log_warning(user_id, warning_number):
 def load_admin_ids():
     """Load admin IDs from Tara_access.txt."""
     try:
-        with open('Tara_access.txt', 'r') as file:
+        with open(TARA_ACCESS_FILE, 'r') as file:
             admin_ids = [int(line.strip()) for line in file if line.strip().isdigit()]
-        logger.info(f"Loaded {len(admin_ids)} admin IDs from Tara_access.txt.")
+        logger.info(f"Loaded {len(admin_ids)} admin IDs from {TARA_ACCESS_FILE}.")
         return admin_ids
     except FileNotFoundError:
-        logger.error("Tara_access.txt not found! Please create the file and add admin Telegram user IDs.")
+        logger.error(f"{TARA_ACCESS_FILE} not found! Please create the file and add admin Telegram user IDs.")
         return []
     except ValueError as e:
         logger.error(f"Error parsing admin IDs: {e}")
@@ -505,6 +506,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Optionally, you can log this event or save it to a file for auditing
 
+# ------------------ Error Handler ------------------
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """Handle errors caused by updates."""
+    logger.error(msg="Exception while handling an update:", exc_info=context.error)
+    
+    # Notify admins about the error
+    admin_ids = load_admin_ids()
+    if admin_ids:
+        error_message = (
+            f"⚠️ **Bot Error**\n"
+            f"**Error:** {context.error}\n"
+            f"**Update:** {update}"
+        )
+        for admin_id in admin_ids:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=error_message,
+                    parse_mode='Markdown'
+                )
+            except Forbidden:
+                logger.error(f"Cannot send error message to admin ID {admin_id}. They might have blocked the bot.")
+            except Exception as e:
+                logger.error(f"Error sending message to admin ID {admin_id}: {e}")
+
 # ------------------ Main Function ------------------
 
 def main():
@@ -522,6 +549,7 @@ def main():
         TOKEN = TOKEN[len('bot='):].strip()
         logger.warning("BOT_TOKEN should not include 'bot=' prefix. Stripping it.")
 
+    # Build the application
     application = ApplicationBuilder().token(TOKEN).build()
 
     # Conversation handler for group registration using /start
@@ -541,7 +569,10 @@ def main():
     application.add_handler(CommandHandler("remove", remove_group))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Start the bot
+    # Add the error handler
+    application.add_error_handler(error_handler)
+
+    # Start the Bot using long polling
     logger.info("Bot started polling...")
     application.run_polling()
 
