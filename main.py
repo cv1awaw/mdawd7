@@ -12,6 +12,7 @@ from telegram.ext import (
     filters,
 )
 from telegram.error import Forbidden, BadRequest
+from telegram.helpers import escape_markdown
 
 DATABASE = 'warnings.db'
 
@@ -252,25 +253,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             for admin_id in admin_ids:
                 try:
+                    # Send the alarm report to the admin
                     await context.bot.send_message(
                         chat_id=admin_id,
                         text=alarm_report,
                         parse_mode='Markdown'
                     )
-                    logger.info(f"Alarm report sent to admin {admin_id}.")
+
+                    # Forward the original Arabic message to the admin
+                    await context.bot.forward_message(
+                        chat_id=admin_id,
+                        from_chat_id=chat.id,
+                        message_id=message.message_id
+                    )
+
+                    logger.info(f"Alarm report and original message forwarded to admin {admin_id}.")
                 except Forbidden:
                     logger.error(f"Cannot send message to admin ID {admin_id}. They might have blocked the bot.")
                 except Exception as e:
                     logger.error(f"Error sending message to admin ID {admin_id}: {e}")
-
-        # Optionally, you can log this event or save it to a file for auditing
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Respond to the /start command."""
     await update.message.reply_text("Bot is running.")
     logger.info(f"/start command received from user {update.effective_user.id}.")
 
-# New Command: /set <user_id> <number>
 async def set_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Set the number of warnings for a specific user. Only accessible by SUPER_ADMIN_ID."""
     user = update.effective_user
@@ -314,7 +321,6 @@ async def set_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Set {new_warnings} warnings for user ID {target_user_id}.")
     logger.info(f"Set {new_warnings} warnings for user ID {target_user_id} by admin {user.id}.")
 
-# New Command: /tara <admin_id>
 async def add_tara_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Add a new admin ID to Tara_access.txt. Only accessible by SUPER_ADMIN_ID."""
     user = update.effective_user
@@ -342,9 +348,6 @@ async def add_tara_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_admin_id(new_admin_id)
     await update.message.reply_text(f"Added user ID {new_admin_id} as a Tara admin.")
     logger.info(f"Added new Tara admin ID {new_admin_id} by super admin {user.id}.")
-
-# Enhanced Command: /info
-from telegram.helpers import escape_markdown
 
 async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Provide information about all users who have received warnings. Accessible by Tara admins."""
@@ -388,7 +391,6 @@ async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # Telegram has a message length limit (4096 characters)
         if len(info_message) > 4000:
-            # Split the message into chunks of 4000 characters
             for i in range(0, len(info_message), 4000):
                 await update.message.reply_text(info_message[i:i+4000], parse_mode='MarkdownV2')
         else:
@@ -397,7 +399,7 @@ async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error sending info message: {e}")
         await update.message.reply_text("An error occurred while generating the info report.")
-        
+
 def main():
     """Initialize the bot and add handlers."""
     init_db()
