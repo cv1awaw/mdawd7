@@ -1,14 +1,26 @@
-# main.py
+#!/usr/bin/env python3
 
 import os
 import sys
 import sqlite3
 import logging
-import html
 import fcntl
 from datetime import datetime, timedelta
 import re
 import asyncio
+import tempfile
+
+# -------------------------------------------------------------------------------------
+# Added imports for PDF and image text extraction (minimal example).
+# Make sure you have these installed and configured if you want the OCR/PDF detection:
+#    pip install PyPDF2 pytesseract pillow
+# And install Tesseract on your system if not already:
+#    e.g. sudo apt-get install tesseract-ocr
+# -------------------------------------------------------------------------------------
+import PyPDF2
+import pytesseract
+from PIL import Image
+
 from telegram import Update, ChatMember
 from telegram.constants import ChatMemberStatus, ChatType
 from telegram.ext import (
@@ -32,24 +44,20 @@ ALLOWED_USER_ID = 6177929931  # Example: 6177929931
 LOCK_FILE = '/tmp/telegram_bot.lock'  # Change path as needed
 
 # Timeframe (in seconds) to delete messages after user removal
-MESSAGE_DELETE_TIMEFRAME = 15  # Increased to 15 seconds to better capture system messages
+MESSAGE_DELETE_TIMEFRAME = 15
 
 # ------------------- Logging Configuration -------------------
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO  # Change to DEBUG for more verbose output
+    level=logging.INFO  # Change to DEBUG for highly detailed output
 )
 logger = logging.getLogger(__name__)
 
 # ------------------- Pending Actions -------------------
 
-# Dictionary to keep track of pending group names
+# Dictionary to keep track of pending group names (for /group_add flow)
 pending_group_names = {}
-
-# Dictionary to keep track of pending user removals
-# Format: {user_id: group_id}
-pending_user_removals = {}
 
 # ------------------- Lock Mechanism -------------------
 
@@ -184,10 +192,13 @@ def add_group(group_id):
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
-        c.execute('INSERT OR IGNORE INTO groups (group_id, group_name) VALUES (?, ?)', (group_id, None))
+        c.execute('''
+            INSERT OR IGNORE INTO groups (group_id, group_name)
+            VALUES (?, ?)
+        ''', (group_id, None))
         conn.commit()
         conn.close()
-        logger.info(f"Added group {group_id} to database with no name.")
+        logger.info(f"Added group {group_id} to database (no name yet).")
     except Exception as e:
         logger.error(f"Error adding group {group_id}: {e}")
         raise
@@ -331,45 +342,35 @@ def is_deletion_enabled(group_id):
         logger.error(f"Error checking deletion status for group {group_id}: {e}")
         return False
 
-def add_user_to_removed_users(group_id, user_id, removal_reason="Removed via /rmove_user"):
-    """
-    Add a user to the removed_users table for a specific group.
-    """
-    try:
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
-        c.execute('''
-            INSERT INTO removed_users (group_id, user_id, removal_reason)
-            VALUES (?, ?, ?)
-        ''', (group_id, user_id, removal_reason))
-        conn.commit()
-        conn.close()
-        logger.info(f"Added user {user_id} to removed_users list for group {group_id}.")
-    except sqlite3.IntegrityError:
-        logger.warning(f"User {user_id} is already in removed_users list for group {group_id}.")
-    except Exception as e:
-        logger.error(f"Error adding user {user_id} to removed_users for group {group_id}: {e}")
-        raise
-
 def remove_user_from_removed_users(group_id, user_id):
     """
     Remove a user from the removed_users table for a specific group.
+    Returns True if row was deleted, False if not found.
     """
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
+        
+        # Debug: show all rows in removed_users prior
+        c.execute("SELECT group_id, user_id FROM removed_users")
+        all_rows = c.fetchall()
+        logger.debug(f"[remove_user_from_removed_users] Currently in removed_users: {all_rows}")
+
         c.execute('DELETE FROM removed_users WHERE group_id = ? AND user_id = ?', (group_id, user_id))
         changes = c.rowcount
         conn.commit()
         conn.close()
+
         if changes > 0:
-            logger.info(f"Removed user {user_id} from removed_users list for group {group_id}.")
+            logger.info(f"Removed user {user_id} from removed_users for group {group_id}.")
             return True
         else:
-            logger.warning(f"User {user_id} not found in removed_users list for group {group_id}.")
+            logger.warning(
+                f"User {user_id} not in removed_users for group {group_id} (no rows deleted)."
+            )
             return False
     except Exception as e:
-        logger.error(f"Error removing user {user_id} from removed_users for group {group_id}: {e}")
+        logger.error(f"Error removing user {user_id} from group {group_id} in removed_users: {e}")
         return False
 
 def revoke_user_permissions(user_id):
@@ -389,452 +390,275 @@ def revoke_user_permissions(user_id):
 
 def list_removed_users(group_id=None):
     """
-    Retrieve all users from the removed_users table.
-    If group_id is provided, filter by that group.
-    Returns a list of tuples containing user_id, removal_reason, and removal_time.
+    Retrieve users from the removed_users table.
+      - If group_id is None, returns a list of tuples: (group_id, user_id, removal_reason, removal_time)
+      - Otherwise, returns (user_id, removal_reason, removal_time)
     """
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
-        if group_id:
-            c.execute('SELECT user_id, removal_reason, removal_time FROM removed_users WHERE group_id = ?', (group_id,))
+        if group_id is not None:
+            c.execute('''
+                SELECT user_id, removal_reason, removal_time
+                FROM removed_users
+                WHERE group_id = ?
+            ''', (group_id,))
+            data = c.fetchall()
         else:
-            c.execute('SELECT group_id, user_id, removal_reason, removal_time FROM removed_users')
-        users = c.fetchall()
+            c.execute('''
+                SELECT group_id, user_id, removal_reason, removal_time
+                FROM removed_users
+            ''')
+            data = c.fetchall()
         conn.close()
-        logger.info("Fetched list of removed users.")
-        return users
+        logger.info("Fetched removed_users entries.")
+        return data
     except Exception as e:
-        logger.error(f"Error fetching removed users: {e}")
+        logger.error(f"Error fetching removed_users: {e}")
         return []
 
 # ------------------- Flag for Message Deletion -------------------
 
-# Dictionary to track groups that should delete messages after removal
-# Format: {group_id: expiration_time}
 delete_all_messages_after_removal = {}
 
 # ------------------- Command Handler Functions -------------------
 
 async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle private messages for setting group names or removing users from the removed_users list.
+    Handle private messages for setting group names (after /group_add).
     """
     user = update.effective_user
     message_text = update.message.text.strip()
-    logger.debug(f"Received private message from user {user.id}: {message_text}")
-    
+    logger.debug(f"Received private message from {user.id}: {message_text}")
+
     if user.id in pending_group_names:
-        # Handle group name assignment
         group_id = pending_group_names.pop(user.id)
         group_name = message_text
-        if group_name:
-            try:
-                set_group_name(group_id, group_name)
-                confirmation_message = escape_markdown(
-                    f"✅ Set group `{group_id}` name to: *{group_name}*",
-                    version=2
-                )
-                await context.bot.send_message(
-                    chat_id=user.id,
-                    text=confirmation_message,
-                    parse_mode='MarkdownV2'
-                )
-                logger.info(f"Set group name for {group_id} to {group_name} by user {user.id}")
-            except Exception as e:
-                error_message = escape_markdown("⚠️ Failed to set group name. Please try `/group_add` again.", version=2)
-                await context.bot.send_message(
-                    chat_id=user.id,
-                    text=error_message,
-                    parse_mode='MarkdownV2'
-                )
-                logger.error(f"Error setting group name for {group_id} by user {user.id}: {e}")
-        else:
-            warning_message = escape_markdown("⚠️ Group name cannot be empty. Please try `/group_add` again.", version=2)
+
+        if not group_name:
+            warning_message = escape_markdown(
+                "⚠️ Group name cannot be empty. Please try `/group_add` again.",
+                version=2
+            )
             await context.bot.send_message(
                 chat_id=user.id,
                 text=warning_message,
                 parse_mode='MarkdownV2'
             )
-            logger.warning(f"Received empty group name from user {user.id} for group {group_id}")
-    
-    elif user.id in pending_user_removals:
-        # Handle user removal from removed_users list
-        group_id = pending_user_removals.pop(user.id)
-        try:
-            target_user_id = int(message_text)
-        except ValueError:
-            message = escape_markdown("⚠️ `user_id` must be an integer.", version=2)
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=message,
-                parse_mode='MarkdownV2'
+            logger.warning(
+                f"User {user.id} gave an empty group name for group {group_id}"
             )
-            logger.warning(f"Received invalid user_id '{message_text}' from user {user.id} for removal from group {group_id}")
             return
-        
-        # Check if the user is in the removed_users list for the group
+
         try:
-            conn = sqlite3.connect(DATABASE)
-            c = conn.cursor()
-            c.execute('SELECT 1 FROM removed_users WHERE group_id = ? AND user_id = ?', (group_id, target_user_id))
-            if not c.fetchone():
-                conn.close()
-                message = escape_markdown(f"⚠️ User `{target_user_id}` is not in the 'Removed Users' list for group `{group_id}`.", version=2)
-                await context.bot.send_message(
-                    chat_id=user.id,
-                    text=message,
-                    parse_mode='MarkdownV2'
-                )
-                logger.warning(f"User {target_user_id} not found in 'Removed Users' for group {group_id} during removal by user {user.id}")
-                return
-            # Proceed to remove
-            c.execute('DELETE FROM removed_users WHERE group_id = ? AND user_id = ?', (group_id, target_user_id))
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            message = escape_markdown("⚠️ Failed to remove user from 'Removed Users'. Please try again later.", version=2)
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=message,
-                parse_mode='MarkdownV2'
+            set_group_name(group_id, group_name)
+            confirmation_message = escape_markdown(
+                f"✅ Set group `{group_id}` name to: *{group_name}*",
+                version=2
             )
-            logger.error(f"Error removing user {target_user_id} from 'Removed Users' for group {group_id}: {e}")
-            return
-        
-        # Optionally, revoke permissions if necessary
-        try:
-            revoke_user_permissions(target_user_id)
-        except Exception as e:
-            logger.error(f"Error revoking permissions for user {target_user_id}: {e}")
-            # Not critical to send message; user is removed from 'Removed Users' list
-            # So we can proceed
-        
-        confirmation_message = escape_markdown(
-            f"✅ User `{target_user_id}` has been removed from the 'Removed Users' list for group `{group_id}`.",
-            version=2
-        )
-        try:
             await context.bot.send_message(
                 chat_id=user.id,
                 text=confirmation_message,
                 parse_mode='MarkdownV2'
             )
-            logger.info(f"Removed user {target_user_id} from 'Removed Users' for group {group_id} by user {user.id}")
+            logger.info(
+                f"Group name for {group_id} set to {group_name} by user {user.id}"
+            )
         except Exception as e:
-            logger.error(f"Error sending confirmation message for user removal: {e}")
+            error_message = escape_markdown(
+                "⚠️ Failed to set group name. Please try `/group_add` again.",
+                version=2
+            )
+            await context.bot.send_message(
+                chat_id=user.id,
+                text=error_message,
+                parse_mode='MarkdownV2'
+            )
+            logger.error(f"Error setting group name for {group_id}: {e}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle the /start command.
+    /start - simple readiness check, only for the ALLOWED_USER_ID
     """
+    user = update.effective_user
+    if user.id != ALLOWED_USER_ID:
+        return
+
     try:
-        user = update.effective_user
-        if user.id != ALLOWED_USER_ID:
-            return  # Ignore unauthorized users
-        message = escape_markdown("✅ Bot is running and ready.", version=2)
+        msg = escape_markdown("✅ Bot is running and ready.", version=2)
         await context.bot.send_message(
             chat_id=user.id,
-            text=message,
+            text=msg,
             parse_mode='MarkdownV2'
         )
-        logger.info(f"/start invoked by user {user.id}")
+        logger.info(f"/start used by {user.id}")
     except Exception as e:
-        logger.error(f"Error handling /start command: {e}")
+        logger.error(f"Error in /start: {e}")
 
 async def group_add_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle the /group_add command to register a group.
-    Usage: /group_add <group_id>
+    /group_add <group_id> – register a group in the DB
     """
     user = update.effective_user
-    logger.debug(f"/group_add called by user {user.id} with args: {context.args}")
-    
     if user.id != ALLOWED_USER_ID:
-        return  # Only respond to authorized user
+        return
 
     if len(context.args) != 1:
-        message = escape_markdown("⚠️ Usage: `/group_add <group_id>`", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Incorrect usage of /group_add by user {user.id}")
+        msg = escape_markdown("⚠️ Usage: `/group_add <group_id>`", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
 
     try:
-        group_id = int(context.args[0])
-        logger.debug(f"Parsed group_id: {group_id}")
+        g_id = int(context.args[0])
     except ValueError:
-        message = escape_markdown("⚠️ `group_id` must be an integer.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Non-integer group_id provided to /group_add by user {user.id}")
+        msg = escape_markdown("⚠️ group_id must be an integer.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
 
-    if group_exists(group_id):
-        message = escape_markdown("⚠️ Group already added.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.debug(f"Group {group_id} already exists.")
+    if group_exists(g_id):
+        msg = escape_markdown("⚠️ Group already registered.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
 
     try:
-        add_group(group_id)
-        logger.debug(f"Added group {group_id} to database.")
-    except Exception as e:
-        message = escape_markdown("⚠️ Failed to add group. Please try again later.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.error(f"Failed to add group {group_id} by user {user.id}: {e}")
-        return
-
-    pending_group_names[user.id] = group_id
-    logger.info(f"Added group {group_id}, awaiting group name from user {user.id} in private chat.")
-    
-    try:
-        confirmation_message = escape_markdown(
-            f"✅ Group `{group_id}` added.\nPlease send the group name in a private message to the bot.",
+        add_group(g_id)
+        pending_group_names[user.id] = g_id
+        confirmation = escape_markdown(
+            f"✅ Group `{g_id}` added.\nPlease send the group name in a private message to the bot.",
             version=2
         )
         await context.bot.send_message(
             chat_id=user.id,
-            text=confirmation_message,
+            text=confirmation,
             parse_mode='MarkdownV2'
         )
     except Exception as e:
-        logger.error(f"Error sending confirmation for /group_add: {e}")
+        logger.error(f"Error adding group {g_id}: {e}")
+        msg = escape_markdown("⚠️ Failed to add group. Please try again.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
 
 async def rmove_group_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle the /rmove_group command to remove a registered group.
-    Usage: /rmove_group <group_id>
+    /rmove_group <group_id> – remove a group from registration
     """
     user = update.effective_user
-    logger.debug(f"/rmove_group called by user {user.id} with args: {context.args}")
     if user.id != ALLOWED_USER_ID:
-        return  # Only respond to authorized user
-    if len(context.args) != 1:
-        message = escape_markdown("⚠️ Usage: `/rmove_group <group_id>`", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Incorrect usage of /rmove_group by user {user.id}")
         return
+
+    if len(context.args) != 1:
+        msg = escape_markdown("⚠️ Usage: `/rmove_group <group_id>`", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
+        return
+
     try:
-        group_id = int(context.args[0])
-        logger.debug(f"Parsed group_id: {group_id}")
+        g_id = int(context.args[0])
     except ValueError:
-        message = escape_markdown("⚠️ `group_id` must be an integer.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Non-integer group_id provided to /rmove_group by user {user.id}")
+        msg = escape_markdown("⚠️ group_id must be integer.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
 
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
-        c.execute('DELETE FROM groups WHERE group_id = ?', (group_id,))
+        c.execute('DELETE FROM groups WHERE group_id = ?', (g_id,))
         changes = c.rowcount
         conn.commit()
         conn.close()
+
         if changes > 0:
-            confirm_message = escape_markdown(
-                f"✅ Group `{group_id}` has been removed from registration.",
-                version=2
-            )
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=confirm_message,
-                parse_mode='MarkdownV2'
-            )
-            logger.info(f"Removed group {group_id} by user {user.id}")
+            cf = escape_markdown(f"✅ Group `{g_id}` removed.", version=2)
+            await context.bot.send_message(chat_id=user.id, text=cf, parse_mode='MarkdownV2')
         else:
-            warning_message = escape_markdown(
-                f"⚠️ Group `{group_id}` does not exist.",
-                version=2
-            )
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=warning_message,
-                parse_mode='MarkdownV2'
-            )
-            logger.warning(f"Attempted to remove non-existent group {group_id} by user {user.id}")
+            warn = escape_markdown(f"⚠️ Group `{g_id}` not found.", version=2)
+            await context.bot.send_message(chat_id=user.id, text=warn, parse_mode='MarkdownV2')
     except Exception as e:
-        message = escape_markdown("⚠️ Failed to remove group. Please try again later.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.error(f"Error removing group {group_id} by user {user.id}: {e}")
+        logger.error(f"Error removing group {g_id}: {e}")
+        msg = escape_markdown("⚠️ Failed to remove group. Try again.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
 
 async def bypass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle the /bypass command to add a user to the bypass list.
-    Usage: /bypass <user_id>
+    /bypass <user_id> – add a user to bypass list
     """
     user = update.effective_user
-    logger.debug(f"/bypass called by user {user.id} with args: {context.args}")
     if user.id != ALLOWED_USER_ID:
-        return  # Only respond to authorized user
+        return
 
     if len(context.args) != 1:
-        message = escape_markdown("⚠️ Usage: `/bypass <user_id>`", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Incorrect usage of /bypass by user {user.id}")
+        msg = escape_markdown("⚠️ Usage: `/bypass <user_id>`", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
 
     try:
-        target_user_id = int(context.args[0])
-        logger.debug(f"Parsed target_user_id: {target_user_id}")
+        uid = int(context.args[0])
     except ValueError:
-        message = escape_markdown("⚠️ `user_id` must be an integer.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Invalid user_id provided to /bypass by user {user.id}")
+        msg = escape_markdown("⚠️ user_id must be integer.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
 
-    # Check if user is already in bypass list
+    # Already bypassed?
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
-        c.execute('SELECT 1 FROM bypass_users WHERE user_id = ?', (target_user_id,))
-        if c.fetchone():
-            conn.close()
-            message = escape_markdown(f"⚠️ User `{target_user_id}` is already in the bypass list.", version=2)
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=message,
-                parse_mode='MarkdownV2'
-            )
-            logger.warning(f"Attempted to add already bypassed user {target_user_id} by user {user.id}")
-            return
+        c.execute('SELECT 1 FROM bypass_users WHERE user_id = ?', (uid,))
+        already = c.fetchone()
         conn.close()
+
+        if already:
+            msg = escape_markdown(f"⚠️ User `{uid}` is already bypassed.", version=2)
+            await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
+            return
     except Exception as e:
-        message = escape_markdown("⚠️ Failed to check bypass status. Please try again later.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.error(f"Error checking bypass status for user {target_user_id}: {e}")
+        logger.error(f"Error checking bypass status for {uid}: {e}")
+        msg = escape_markdown("⚠️ Internal check failed. Try again.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
 
     try:
-        add_bypass_user(target_user_id)
-        confirmation_message = escape_markdown(
-            f"✅ Added user `{target_user_id}` to the bypass list.",
-            version=2
-        )
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=confirmation_message,
-            parse_mode='MarkdownV2'
-        )
-        logger.info(f"Added user {target_user_id} to bypass list by user {user.id}")
+        add_bypass_user(uid)
+        msg = escape_markdown(f"✅ User `{uid}` is now bypassed.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
     except Exception as e:
-        message = escape_markdown("⚠️ Failed to add user to bypass list. Please try again later.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.error(f"Error adding user {target_user_id} to bypass list by user {user.id}: {e}")
+        logger.error(f"Error bypassing user {uid}: {e}")
+        msg = escape_markdown("⚠️ Failed to add bypass. Try again.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
 
 async def unbypass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle the /unbypass command to remove a user from the bypass list.
-    Usage: /unbypass <user_id>
+    /unbypass <user_id> – remove user from bypass
     """
     user = update.effective_user
-    logger.debug(f"/unbypass called by user {user.id} with args: {context.args}")
     if user.id != ALLOWED_USER_ID:
-        return  # Only respond to authorized user
-    if len(context.args) != 1:
-        message = escape_markdown("⚠️ Usage: `/unbypass <user_id>`", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Incorrect usage of /unbypass by user {user.id}")
         return
-    try:
-        target_user_id = int(context.args[0])
-        logger.debug(f"Parsed target_user_id: {target_user_id}")
-    except ValueError:
-        message = escape_markdown("⚠️ `user_id` must be an integer.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Invalid user_id provided to /unbypass by user {user.id}")
+
+    if len(context.args) != 1:
+        msg = escape_markdown("⚠️ Usage: `/unbypass <user_id>`", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
 
     try:
-        if remove_bypass_user(target_user_id):
-            confirmation_message = escape_markdown(
-                f"✅ Removed user `{target_user_id}` from the bypass list.",
-                version=2
-            )
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=confirmation_message,
-                parse_mode='MarkdownV2'
-            )
-            logger.info(f"Removed user {target_user_id} from bypass list by user {user.id}")
-        else:
-            warning_message = escape_markdown(
-                f"⚠️ User `{target_user_id}` was not in the bypass list.",
-                version=2
-            )
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=warning_message,
-                parse_mode='MarkdownV2'
-            )
-            logger.warning(f"Attempted to remove non-bypassed user {target_user_id} by user {user.id}")
-    except Exception as e:
-        message = escape_markdown("⚠️ Failed to remove user from bypass list. Please try again later.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.error(f"Error removing user {target_user_id} from bypass list by user {user.id}: {e}")
+        uid = int(context.args[0])
+    except ValueError:
+        msg = escape_markdown("⚠️ user_id must be integer.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
+        return
+
+    res = remove_bypass_user(uid)
+    if res:
+        cf = escape_markdown(f"✅ Removed `{uid}` from bypass list.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=cf, parse_mode='MarkdownV2')
+    else:
+        wr = escape_markdown(f"⚠️ `{uid}` not in bypass list.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=wr, parse_mode='MarkdownV2')
 
 async def show_groups_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle the /show or /list command to display all groups and their settings.
+    /show or /list – show all groups and their deletion settings
     """
     user = update.effective_user
-    logger.debug(f"/show called by user {user.id}")
     if user.id != ALLOWED_USER_ID:
-        return  # Only respond to authorized user
+        return
+
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
@@ -843,13 +667,8 @@ async def show_groups_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
 
         if not groups_data:
-            message = escape_markdown("⚠️ No groups have been added.", version=2)
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=message,
-                parse_mode='MarkdownV2'
-            )
-            logger.debug("No groups found in the database.")
+            msg = escape_markdown("⚠️ No groups have been added.", version=2)
+            await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
             return
 
         msg = "*Groups Information:*\n\n"
@@ -858,156 +677,105 @@ async def show_groups_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             g_name_esc = escape_markdown(g_name_display, version=2)
             msg += f"*Group:* {g_name_esc}\n*Group ID:* `{g_id}`\n"
 
-            # Fetch deletion settings
+            # deletion setting
             try:
                 conn = sqlite3.connect(DATABASE)
                 c = conn.cursor()
                 c.execute('SELECT enabled FROM deletion_settings WHERE group_id = ?', (g_id,))
                 row = c.fetchone()
                 conn.close()
-                deletion_status = "Enabled" if row and row[0] else "Disabled"
-                msg += f"*Deletion Status:* `{deletion_status}`\n"
+                status = "Enabled" if row and row[0] else "Disabled"
+                msg += f"*Deletion:* `{status}`\n\n"
             except Exception as e:
                 msg += "⚠️ Error fetching deletion status.\n"
-                logger.error(f"Error fetching deletion status for group {g_id}: {e}")
+                logger.error(f"Deletion status error for group {g_id}: {e}")
 
-            msg += "\n"
-
-        try:
-            # Telegram message length limit is 4096 characters
-            if len(msg) > 4000:
-                for i in range(0, len(msg), 4000):
-                    chunk = msg[i:i+4000]
-                    await context.bot.send_message(
-                        chat_id=user.id,
-                        text=chunk,
-                        parse_mode='MarkdownV2'
-                    )
-            else:
+        # Send in chunks if too long
+        if len(msg) > 4000:
+            for i in range(0, len(msg), 4000):
+                chunk = msg[i:i+4000]
                 await context.bot.send_message(
                     chat_id=user.id,
-                    text=msg,
+                    text=chunk,
                     parse_mode='MarkdownV2'
                 )
-            logger.info("Displayed comprehensive bot information.")
-        except Exception as e:
-            logger.error(f"Error sending /show information: {e}")
-            message = escape_markdown("⚠️ An error occurred while sending the list.", version=2)
+        else:
             await context.bot.send_message(
                 chat_id=user.id,
-                text=message,
+                text=msg,
                 parse_mode='MarkdownV2'
             )
     except Exception as e:
-        logger.error(f"Error handling /show command: {e}")
-        message = escape_markdown("⚠️ Failed to retrieve list information. Please try again later.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
+        logger.error(f"Error showing groups: {e}")
+        err_msg = escape_markdown("⚠️ Failed to get group list. Try again.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=err_msg, parse_mode='MarkdownV2')
 
 async def group_id_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle the /group_id command to retrieve the current group or user ID.
+    /group_id – show the ID of the current group or the user’s ID if in private
     """
     user = update.effective_user
-    group = update.effective_chat
-    user_id = user.id
-    logger.debug(f"/group_id called by user {user_id} in chat {group.id}")
-    
-    if user_id != ALLOWED_USER_ID:
-        return  # Only respond to authorized user
-    
+    chat = update.effective_chat
+
+    if user.id != ALLOWED_USER_ID:
+        return
+
+    if chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        g_id = chat.id
+        msg = escape_markdown(f"Group ID: `{g_id}`", version=2)
+    else:
+        msg = escape_markdown(f"Your User ID: `{user.id}`", version=2)
+
     try:
-        if group.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
-            group_id = group.id
-            message = escape_markdown(f"🔢 *Group ID:* `{group_id}`", version=2)
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=message,
-                parse_mode='MarkdownV2'
-            )
-            logger.info(f"Sent group ID {group_id} to user {user_id}")
-        else:
-            # If it's a private chat
-            message = escape_markdown(f"🔢 *Your User ID:* `{user_id}`", version=2)
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=message,
-                parse_mode='MarkdownV2'
-            )
-            logger.info(f"Sent user ID {user_id} in private chat.")
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
     except Exception as e:
-        logger.error(f"Error handling /group_id command: {e}")
-        message = escape_markdown("⚠️ An error occurred while processing the command.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
+        logger.error(f"Error in /group_id: {e}")
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle the /help command to display available commands.
+    /help – list available commands
     """
     user = update.effective_user
-    logger.debug(f"/help called by user {user.id}, ALLOWED_USER_ID={ALLOWED_USER_ID}")
     if user.id != ALLOWED_USER_ID:
-        return  # Only respond to authorized user
-    help_text = """*Available Commands:*
-• `/start` - Check if the bot is running
-• `/group_add <group_id>` - Register a group (use the actual chat ID of the group)
-• `/rmove_group <group_id>` - Remove a registered group
-• `/bypass <user_id>` - Add a user to bypass warnings
-• `/unbypass <user_id>` - Remove a user from bypass warnings
-• `/group_id` - Retrieve current group ID or user ID
-• `/show` - Display all groups and their deletion settings
-• `/info` - Display current bot configuration
-• `/help` - Display this help message
-• `/list` - Overview of groups and bypassed users
-• `/be_sad <group_id>` - Enable Arabic message deletion in the group
-• `/be_happy <group_id>` - Disable Arabic message deletion in the group
-• `/rmove_user <group_id> <user_id>` - Remove a user from a group without sending notifications
-• `/add_removed_user <group_id> <user_id>` - Add a user to the 'Removed Users' list for a specific group
-• `/list_removed_users` - Display all users in the 'Removed Users' list for each group
-• `/list_rmoved_rmove <group_id>` - Request removal of a user from the 'Removed Users' list for a specific group
-• `/check <group_id>` - Verify the 'Removed Users' list against actual group members and remove discrepancies
+        return
+
+    help_text = """*Commands:*
+• `/start` – Check if the bot is running
+• `/group_add <group_id>` – Register a group by its chat ID
+• `/rmove_group <group_id>` – Remove a registered group
+• `/bypass <user_id>` – Add a user to the bypass list
+• `/unbypass <user_id>` – Remove a user from the bypass list
+• `/group_id` – Show the current group ID or your user ID (if private)
+• `/show` – Display all groups & their settings
+• `/info` – Display current config
+• `/help` – Display this help text
+• `/list` – Same as `/show`
+• `/be_sad <group_id>` – Enable Arabic message deletion
+• `/be_happy <group_id>` – Disable Arabic message deletion
+• `/rmove_user <group_id> <user_id>` – Remove user from group + DB
+• `/add_removed_user <group_id> <user_id>` – Add a user to the 'Removed Users'
+• `/list_removed_users` – Show all users in 'Removed Users'
+• `/unremove_user <group_id> <user_id>` – Remove a user from 'Removed Users'
+• `/check <group_id>` – Validate 'Removed Users' vs. actual group membership
 """
     try:
-        # Escape special characters for MarkdownV2
-        help_text_esc = escape_markdown(help_text, version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=help_text_esc,
-            parse_mode='MarkdownV2'
-        )
-        logger.info("Displayed help information to user.")
+        help_esc = escape_markdown(help_text, version=2)
+        await context.bot.send_message(chat_id=user.id, text=help_esc, parse_mode='MarkdownV2')
     except Exception as e:
-        logger.error(f"Error sending help information: {e}")
-        message = escape_markdown("⚠️ An error occurred while sending the help information.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
+        logger.error(f"Error in /help: {e}")
 
 async def info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle the /info command to display current configuration.
+    /info – show groups, bypassed users, etc.
     """
     user = update.effective_user
-    user_id = user.id
-    logger.debug(f"/info called by user {user_id}")
-
-    if user_id != ALLOWED_USER_ID:
-        return  # Only respond to authorized user
+    if user.id != ALLOWED_USER_ID:
+        return
 
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
 
-        # Fetch all groups and their deletion settings
         c.execute('''
             SELECT g.group_id, g.group_name, ds.enabled
             FROM groups g
@@ -1015,939 +783,606 @@ async def info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ''')
         groups = c.fetchall()
 
-        # Fetch all bypassed users
-        c.execute('''
-            SELECT user_id FROM bypass_users
-        ''')
-        bypass_users = c.fetchall()
+        c.execute('SELECT user_id FROM bypass_users')
+        bypassed = c.fetchall()
 
         conn.close()
 
-        msg = "*Bot Information:*\n\n"
-        msg += "*Registered Groups:*\n"
+        msg = "*Bot Info:*\n\n"
+        msg += "*Groups:*\n"
         if groups:
-            for g_id, g_name, enabled in groups:
-                g_name_display = g_name if g_name else "Name not set"
-                deletion_status = "Enabled" if enabled else "Disabled"
-                msg += f"• *Group Name:* {escape_markdown(g_name_display, version=2)}\n"
-                msg += f"  *Group ID:* `{g_id}`\n"
+            for g_id, g_name, enab in groups:
+                name_disp = g_name if g_name else "Name not set"
+                deletion_status = "Enabled" if enab else "Disabled"
+                msg += f"• *Name:* {escape_markdown(name_disp, version=2)}\n"
+                msg += f"  *ID:* `{g_id}`\n"
                 msg += f"  *Deletion:* `{deletion_status}`\n\n"
         else:
-            msg += "⚠️ No groups have been added.\n\n"
+            msg += "No groups added.\n\n"
 
         msg += "*Bypassed Users:*\n"
-        if bypass_users:
-            for (b_id,) in bypass_users:
-                msg += f"• *User ID:* `{b_id}`\n"
+        if bypassed:
+            for (uid,) in bypassed:
+                msg += f"• `{uid}`\n"
         else:
-            msg += "⚠️ No users are being bypassed.\n"
+            msg += "No bypassed users.\n"
 
-        try:
-            # Telegram message length limit is 4096 characters
-            if len(msg) > 4000:
-                for i in range(0, len(msg), 4000):
-                    chunk = msg[i:i+4000]
-                    await context.bot.send_message(
-                        chat_id=user.id,
-                        text=chunk,
-                        parse_mode='MarkdownV2'
-                    )
-            else:
+        if len(msg) > 4000:
+            for i in range(0, len(msg), 4000):
+                chunk = msg[i:i+4000]
                 await context.bot.send_message(
-                    chat_id=user.id,
-                    text=msg,
-                    parse_mode='MarkdownV2'
+                    chat_id=user.id, text=chunk, parse_mode='MarkdownV2'
                 )
-            logger.info("Displayed bot information.")
-        except Exception as e:
-            logger.error(f"Error sending /info information: {e}")
-            message = escape_markdown("⚠️ An error occurred while sending the information.", version=2)
+        else:
             await context.bot.send_message(
-                chat_id=user.id,
-                text=message,
-                parse_mode='MarkdownV2'
+                chat_id=user.id, text=msg, parse_mode='MarkdownV2'
             )
     except Exception as e:
-        logger.error(f"Error handling /info command: {e}")
-        message = escape_markdown("⚠️ Failed to retrieve information. Please try again later.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
+        logger.error(f"Error in /info: {e}")
+        er = escape_markdown("⚠️ Failed to retrieve info. Try again.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=er, parse_mode='MarkdownV2')
 
-# ------------------- New Commands: /add_removed_user & /list_removed_users -------------------
+# ------------------- Commands to manage removed_users -------------------
 
 async def add_removed_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle the /add_removed_user command to add a user to the 'Removed Users' list for a specific group.
-    Usage: /add_removed_user <group_id> <user_id>
+    /add_removed_user <group_id> <user_id> – manually add a user to 'Removed Users'
     """
     user = update.effective_user
-    logger.debug(f"/add_removed_user called by user {user.id} with args: {context.args}")
-    
     if user.id != ALLOWED_USER_ID:
-        return  # Only respond to authorized user
+        return
 
     if len(context.args) != 2:
-        message = escape_markdown("⚠️ Usage: `/add_removed_user <group_id> <user_id>`", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Incorrect usage of /add_removed_user by user {user.id}")
+        msg = escape_markdown("⚠️ Usage: `/add_removed_user <group_id> <user_id>`", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
 
     try:
-        group_id = int(context.args[0])
-        target_user_id = int(context.args[1])
-        logger.debug(f"Parsed group_id: {group_id}, user_id: {target_user_id}")
+        g_id = int(context.args[0])
+        u_id = int(context.args[1])
     except ValueError:
-        message = escape_markdown("⚠️ Both `group_id` and `user_id` must be integers.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Invalid group_id or user_id provided to /add_removed_user by user {user.id}")
+        msg = escape_markdown("⚠️ Both group_id and user_id must be integers.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
 
-    if not group_exists(group_id):
-        message = escape_markdown(f"⚠️ Group `{group_id}` is not registered. Please add it using `/group_add {group_id}`.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Attempted to add removed user to unregistered group {group_id} by user {user.id}")
+    if not group_exists(g_id):
+        warn = escape_markdown(f"⚠️ Group `{g_id}` is not registered.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=warn, parse_mode='MarkdownV2')
         return
 
-    # Check if user is already in removed_users list for the group
+    # Check if user is already there
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
-        c.execute('SELECT 1 FROM removed_users WHERE group_id = ? AND user_id = ?', (group_id, target_user_id))
-        if c.fetchone():
+        c.execute('SELECT 1 FROM removed_users WHERE group_id=? AND user_id=?', (g_id, u_id))
+        already = c.fetchone()
+        if already:
             conn.close()
-            message = escape_markdown(f"⚠️ User `{target_user_id}` is already in the 'Removed Users' list for group `{group_id}`.", version=2)
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=message,
-                parse_mode='MarkdownV2'
+            msg = escape_markdown(
+                f"⚠️ User `{u_id}` is already in 'Removed Users' for group `{g_id}`.",
+                version=2
             )
-            logger.warning(f"Attempted to add already removed user {target_user_id} to group {group_id} by user {user.id}")
+            await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
             return
-        conn.close()
-    except Exception as e:
-        message = escape_markdown("⚠️ Failed to check 'Removed Users' list. Please try again later.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.error(f"Error checking 'Removed Users' for group {group_id}: {e}")
-        return
 
-    try:
-        # Add user to 'Removed Users' list
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
         c.execute('''
             INSERT INTO removed_users (group_id, user_id, removal_reason)
             VALUES (?, ?, ?)
-        ''', (group_id, target_user_id, "Manually added via /add_removed_user"))
+        ''', (g_id, u_id, "Manually added"))
         conn.commit()
         conn.close()
-        confirmation_message = escape_markdown(
-            f"✅ Added user `{target_user_id}` to the 'Removed Users' list for group `{group_id}`.",
+
+        msg = escape_markdown(
+            f"✅ Added user `{u_id}` to 'Removed Users' for group `{g_id}`.",
             version=2
         )
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=confirmation_message,
-            parse_mode='MarkdownV2'
-        )
-        logger.info(f"Added user {target_user_id} to 'Removed Users' for group {group_id} by user {user.id}")
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
     except Exception as e:
-        message = escape_markdown("⚠️ Failed to add user to 'Removed Users' list. Please try again later.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.error(f"Error adding user {target_user_id} to 'Removed Users' for group {group_id}: {e}")
+        logger.error(f"Error adding user {u_id} to removed_users: {e}")
+        err = escape_markdown("⚠️ Failed to add user. Try again.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=err, parse_mode='MarkdownV2')
 
 async def list_removed_users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle the /list_removed_users command to display all users in the 'Removed Users' list for each group.
-    Usage: /list_removed_users
+    /list_removed_users – list all users in the 'Removed Users' table
     """
     user = update.effective_user
-    logger.debug(f"/list_removed_users called by user {user.id}")
-    
     if user.id != ALLOWED_USER_ID:
-        return  # Only respond to authorized user
+        return
 
     try:
-        removed_users = list_removed_users()
-        if not removed_users:
-            message = escape_markdown("⚠️ The 'Removed Users' list is empty.", version=2)
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=message,
-                parse_mode='MarkdownV2'
-            )
-            logger.info("Displayed empty 'Removed Users' list.")
+        removed_data = list_removed_users()
+        if not removed_data:
+            msg = escape_markdown("⚠️ 'Removed Users' is empty.", version=2)
+            await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
             return
 
-        # Organize removed users by group
-        groups = {}
-        for record in removed_users:
-            if len(record) == 3:
-                # If group_id is not included
-                group_id, user_id, removal_reason, removal_time = record[0], record[1], record[2], record[3]
-            else:
-                group_id, user_id, removal_reason, removal_time = record
-            if group_id not in groups:
-                groups[group_id] = []
-            groups[group_id].append((user_id, removal_reason, removal_time))
+        # group them by group_id
+        grouped = {}
+        for g_id, u_id, reason, tstamp in removed_data:
+            if g_id not in grouped:
+                grouped[g_id] = []
+            grouped[g_id].append((u_id, reason, tstamp))
 
-        msg = "*Removed Users:*\n\n"
-        for group_id, users in groups.items():
-            msg += f"*Group ID:* `{group_id}`\n"
-            for user_id, reason, time in users:
-                msg += f"• *User ID:* `{user_id}`\n"
-                msg += f"  *Reason:* {escape_markdown(reason, version=2)}\n"
-                msg += f"  *Removed At:* {time}\n"
-            msg += "\n"
+        output = "*Removed Users:*\n\n"
+        for g_id, items in grouped.items():
+            output += f"*Group:* `{g_id}`\n"
+            for (usr, reas, tm) in items:
+                output += f"• *User:* `{usr}`\n"
+                output += f"  *Reason:* {escape_markdown(reas, version=2)}\n"
+                output += f"  *Removed At:* {tm}\n"
+            output += "\n"
 
-        try:
-            # Telegram message length limit is 4096 characters
-            if len(msg) > 4000:
-                for i in range(0, len(msg), 4000):
-                    chunk = msg[i:i+4000]
-                    await context.bot.send_message(
-                        chat_id=user.id,
-                        text=chunk,
-                        parse_mode='MarkdownV2'
-                    )
-            else:
+        if len(output) > 4000:
+            for i in range(0, len(output), 4000):
+                chunk = output[i:i+4000]
                 await context.bot.send_message(
-                    chat_id=user.id,
-                    text=msg,
-                    parse_mode='MarkdownV2'
+                    chat_id=user.id, text=chunk, parse_mode='MarkdownV2'
                 )
-            logger.info("Displayed 'Removed Users' list.")
-        except Exception as e:
-            logger.error(f"Error sending 'Removed Users' list: {e}")
-            message = escape_markdown("⚠️ An error occurred while sending the list.", version=2)
+        else:
             await context.bot.send_message(
-                chat_id=user.id,
-                text=message,
-                parse_mode='MarkdownV2'
+                chat_id=user.id, text=output, parse_mode='MarkdownV2'
             )
     except Exception as e:
-        logger.error(f"Error handling /list_removed_users command: {e}")
-        message = escape_markdown("⚠️ Failed to retrieve 'Removed Users' list. Please try again later.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
+        logger.error(f"Error in /list_removed_users: {e}")
+        msg = escape_markdown("⚠️ Failed to list removed users.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
 
-# ------------------- New /list_rmoved_rmove Command -------------------
-
-async def list_rmoved_rmove_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def unremove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle the /list_rmoved_rmove command to request removal of a user from the 'Removed Users' list for a specific group.
-    Usage: /list_rmoved_rmove <group_id>
+    /unremove_user <group_id> <user_id> – remove user from 'Removed Users'
     """
     user = update.effective_user
-    logger.debug(f"/list_rmoved_rmove called by user {user.id} with args: {context.args}")
-    
     if user.id != ALLOWED_USER_ID:
-        logger.warning(f"Unauthorized access attempt by user {user.id} for /list_rmoved_rmove command.")
-        return  # Only respond to authorized user
+        return
 
-    if len(context.args) != 1:
-        message = escape_markdown("⚠️ Usage: `/list_rmoved_rmove <group_id>`", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Incorrect usage of /list_rmoved_rmove by user {user.id}")
+    if len(context.args) != 2:
+        msg = escape_markdown("⚠️ Usage: `/unremove_user <group_id> <user_id>`", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
 
     try:
-        group_id = int(context.args[0])
-        logger.debug(f"Parsed group_id: {group_id}")
+        g_id = int(context.args[0])
+        u_id = int(context.args[1])
     except ValueError:
-        message = escape_markdown("⚠️ `group_id` must be an integer.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Non-integer group_id provided to /list_rmoved_rmove by user {user.id}")
+        msg = escape_markdown("⚠️ Both group_id and user_id must be integers.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
 
-    if not group_exists(group_id):
-        message = escape_markdown(f"⚠️ Group `{group_id}` is not registered. Please add it using `/group_add {group_id}`.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Attempted to use /list_rmoved_rmove for unregistered group {group_id} by user {user.id}")
+    if not group_exists(g_id):
+        warn = escape_markdown(f"⚠️ Group `{g_id}` is not registered.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=warn, parse_mode='MarkdownV2')
         return
 
-    # Set pending removal for the user
-    pending_user_removals[user.id] = group_id
-    logger.info(f"Set pending user removal from group {group_id} by user {user.id}")
-
-    # Prompt the user to send the user_id to remove
-    try:
-        prompt_message = escape_markdown(
-            f"Please send the `user_id` of the user you wish to remove from the 'Removed Users' list for group `{group_id}`.",
+    removed = remove_user_from_removed_users(g_id, u_id)
+    if not removed:
+        msg = escape_markdown(
+            f"⚠️ User `{u_id}` is not in the 'Removed Users' list for group `{g_id}`.",
             version=2
         )
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=prompt_message,
-            parse_mode='MarkdownV2'
-        )
-        logger.debug(f"Sent removal prompt for group {group_id} to user {user.id}")
-    except Exception as e:
-        logger.error(f"Error sending removal prompt for group {group_id}: {e}")
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
+        return
 
-# ------------------- Existing /rmove_user Command -------------------
+    # Optionally revoke user permissions
+    try:
+        revoke_user_permissions(u_id)
+    except Exception as e:
+        logger.error(f"Error revoking perms for user {u_id}: {e}")
+
+    cf = escape_markdown(
+        f"✅ User `{u_id}` removed from 'Removed Users' for group `{g_id}`.",
+        version=2
+    )
+    await context.bot.send_message(chat_id=user.id, text=cf, parse_mode='MarkdownV2')
+
+# ------------------- Remove or forcibly ban user from group -------------------
 
 async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle the /rmove_user command to remove a user from a group without sending notifications.
-    Usage: /rmove_user <group_id> <user_id>
+    /rmove_user <group_id> <user_id> – forcibly remove user from group & table
     """
     user = update.effective_user
-    logger.debug(f"/rmove_user called by user {user.id} with args: {context.args}")
-
-    # Check if the user is authorized
     if user.id != ALLOWED_USER_ID:
-        return  # Only respond to authorized user
+        return
 
-    # Check for correct number of arguments
     if len(context.args) != 2:
-        message = escape_markdown("⚠️ Usage: `/rmove_user <group_id> <user_id>`", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Incorrect usage of /rmove_user by user {user.id}")
+        msg = escape_markdown("⚠️ Usage: `/rmove_user <group_id> <user_id>`", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
 
-    # Parse group_id and user_id
     try:
-        group_id = int(context.args[0])
-        target_user_id = int(context.args[1])
-        logger.debug(f"Parsed group_id: {group_id}, user_id: {target_user_id}")
+        g_id = int(context.args[0])
+        u_id = int(context.args[1])
     except ValueError:
-        message = escape_markdown("⚠️ Both `group_id` and `user_id` must be integers.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Invalid group_id or user_id provided to /rmove_user by user {user.id}")
+        msg = escape_markdown("⚠️ Both group_id and user_id must be integers.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
 
-    # Remove user from bypass list
+    # 1) remove from bypass, if present
+    remove_bypass_user(u_id)
+
+    # 2) remove from removed_users
+    remove_user_from_removed_users(g_id, u_id)
+
+    # 3) revoke permissions
     try:
-        if remove_bypass_user(target_user_id):
-            logger.info(f"Removed user {target_user_id} from bypass list by user {user.id}")
-        else:
-            logger.info(f"User {target_user_id} was not in bypass list.")
+        revoke_user_permissions(u_id)
     except Exception as e:
-        message = escape_markdown("⚠️ Failed to update bypass list. Please try again later.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.error(f"Error removing user {target_user_id} from bypass list: {e}")
-        return
+        logger.error(f"Failed to revoke perms for {u_id}: {e}")
 
-    # Add user to removed_users list
+    # 4) ban from group
     try:
-        add_user_to_removed_users(group_id, target_user_id)
+        await context.bot.ban_chat_member(chat_id=g_id, user_id=u_id)
     except Exception as e:
-        message = escape_markdown("⚠️ Failed to add user to 'Removed Users' list. Please try again later.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
+        err = escape_markdown(
+            f"⚠️ Could not ban `{u_id}` from group `{g_id}` (check bot perms).", version=2
         )
-        logger.error(f"Error adding user {target_user_id} to 'Removed Users' for group {group_id}: {e}")
+        await context.bot.send_message(chat_id=user.id, text=err, parse_mode='MarkdownV2')
+        logger.error(f"Ban error for user {u_id} in group {g_id}: {e}")
         return
 
-    # Revoke user permissions
-    try:
-        revoke_user_permissions(target_user_id)
-        logger.info(f"Revoked permissions for user {target_user_id} in permissions system.")
-    except Exception as e:
-        message = escape_markdown("⚠️ Failed to revoke user permissions. Please check the permissions system.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.error(f"Error revoking permissions for user {target_user_id}: {e}")
-        return
+    # 5) set short-term deletion flag
+    delete_all_messages_after_removal[g_id] = datetime.utcnow() + timedelta(seconds=MESSAGE_DELETE_TIMEFRAME)
+    asyncio.create_task(remove_deletion_flag_after_timeout(g_id))
 
-    # Attempt to remove the user from the group
-    try:
-        await context.bot.ban_chat_member(chat_id=group_id, user_id=target_user_id)
-        logger.info(f"Removed user {target_user_id} from group {group_id} via bot.")
-    except Exception as e:
-        message = escape_markdown(f"⚠️ Failed to remove user `{target_user_id}` from group `{group_id}`. Ensure the bot has the necessary permissions.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.error(f"Error removing user {target_user_id} from group {group_id}: {e}")
-        return
-
-    # Set flag to delete any messages in the group during MESSAGE_DELETE_TIMEFRAME seconds
-    delete_all_messages_after_removal[group_id] = datetime.utcnow() + timedelta(seconds=MESSAGE_DELETE_TIMEFRAME)
-    logger.info(f"Set message deletion flag for group {group_id} for {MESSAGE_DELETE_TIMEFRAME} seconds.")
-
-    # Schedule removal of the flag after MESSAGE_DELETE_TIMEFRAME seconds
-    asyncio.create_task(remove_deletion_flag_after_timeout(group_id))
-
-    # Send confirmation to the authorized user privately
-    confirmation_message = escape_markdown(
-        f"✅ Removed user `{target_user_id}` from group `{group_id}` and added to 'Removed Users' list.\nAny messages sent to the group within the next {MESSAGE_DELETE_TIMEFRAME} seconds will be deleted.",
+    msg = escape_markdown(
+        f"✅ Removed `{u_id}` from group `{g_id}`.\n"
+        f"Messages for next {MESSAGE_DELETE_TIMEFRAME}s will be deleted.",
         version=2
     )
-    try:
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=confirmation_message,
-            parse_mode='MarkdownV2'
-        )
-        logger.info(f"Sent confirmation to user {user.id} about removing user {target_user_id} from group {group_id} and adding to 'Removed Users'.")
-    except Exception as e:
-        logger.error(f"Error sending confirmation message for /rmove_user: {e}")
+    await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
 
-# ------------------- Message Handler Functions -------------------
+# ------------------- Deletion / Filtering Handlers -------------------
 
 async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Delete messages containing Arabic text in groups where deletion is enabled.
+    Delete any message (including PDFs, images, etc.) if the text, caption,
+    or extracted text from attached PDF/image has Arabic characters.
     """
-    message = update.message
-    if not message or not message.text:
-        logger.debug("Received a non-text or empty message.")
-        return  # Ignore non-text messages or empty messages
-
-    user = message.from_user
-    chat = message.chat
-    group_id = chat.id
-
-    logger.debug(f"Checking message in group {group_id} from user {user.id}: {message.text}")
-
-    # Check if deletion is enabled for this group
-    if not is_deletion_enabled(group_id):
-        logger.debug(f"Deletion not enabled for group {group_id}.")
+    msg = update.message
+    if not msg:
         return
 
-    # Check if the user is bypassed
+    user = msg.from_user
+    g_id = msg.chat.id
+
+    if not is_deletion_enabled(g_id):
+        return
+
     if is_bypass_user(user.id):
-        logger.debug(f"User {user.id} is bypassed. Message will not be deleted.")
         return
 
-    # Check if the message contains Arabic
-    if is_arabic(message.text):
+    # Check for Arabic in either text or caption
+    text_or_caption = msg.text or msg.caption
+    if text_or_caption and has_arabic(text_or_caption):
         try:
-            await message.delete()
-            logger.info(f"Deleted Arabic message from user {user.id} in group {group_id}.")
-            # Warning message removed to only delete the message without notifying the user
+            await msg.delete()
+            logger.info(f"Deleted message with Arabic from user {user.id} in group {g_id}")
         except Exception as e:
-            logger.error(f"Error deleting message in group {group_id}: {e}")
+            logger.error(f"Error deleting msg in group {g_id}: {e}")
+        return
+
+    # --------------------------------------------------------------------
+    # Additional checks for PDFs or images. If the message has a document
+    # with .pdf extension, or a photo, we attempt to extract text and check.
+    # --------------------------------------------------------------------
+
+    # 1) If it's a PDF document
+    if msg.document and msg.document.file_name and msg.document.file_name.lower().endswith('.pdf'):
+        file_id = msg.document.file_id
+        file_ref = await context.bot.get_file(file_id)
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
+            await file_ref.download_to_drive(tmp_pdf.name)
+            tmp_pdf.flush()
+            try:
+                with open(tmp_pdf.name, 'rb') as pdf_file:
+                    reader = PyPDF2.PdfReader(pdf_file)
+                    all_text = ""
+                    for page in reader.pages:
+                        page_text = page.extract_text() or ""
+                        all_text += page_text
+                    if all_text and has_arabic(all_text):
+                        try:
+                            await msg.delete()
+                            logger.info(f"Deleted PDF with Arabic text from user {user.id} in group {g_id}")
+                        except Exception as e:
+                            logger.error(f"Error deleting PDF in group {g_id}: {e}")
+            except Exception as e:
+                logger.error(f"Failed to parse PDF: {e}")
+            finally:
+                # clean up
+                try:
+                    os.remove(tmp_pdf.name)
+                except:
+                    pass
+
+    # 2) If it's a photo
+    if msg.photo:
+        # Telegram photos come in different sizes; pick the highest-res
+        photo_obj = msg.photo[-1]
+        file_id = photo_obj.file_id
+        file_ref = await context.bot.get_file(file_id)
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_img:
+            await file_ref.download_to_drive(tmp_img.name)
+            tmp_img.flush()
+            try:
+                # OCR the image
+                text_extracted = pytesseract.image_to_string(Image.open(tmp_img.name)) or ""
+                if text_extracted and has_arabic(text_extracted):
+                    try:
+                        await msg.delete()
+                        logger.info(f"Deleted image with Arabic text from user {user.id} in group {g_id}")
+                    except Exception as e:
+                        logger.error(f"Error deleting image in group {g_id}: {e}")
+            except Exception as e:
+                logger.error(f"Failed to do OCR on image: {e}")
+            finally:
+                # clean up
+                try:
+                    os.remove(tmp_img.name)
+                except:
+                    pass
 
 async def delete_any_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Delete any message sent to the group if the deletion flag is active.
-    This includes messages from users and system messages.
+    Delete any messages if the group is flagged after a removal for MESSAGE_DELETE_TIMEFRAME seconds.
     """
-    message = update.message
-    if not message:
+    msg = update.message
+    if not msg:
         return
 
-    chat = message.chat
-    group_id = chat.id
-
-    # Check if the group is flagged for message deletion
-    if group_id in delete_all_messages_after_removal:
+    g_id = msg.chat.id
+    if g_id in delete_all_messages_after_removal:
         try:
-            await message.delete()
-            logger.info(f"Deleted message in group {group_id}: {message.text or 'Non-text message.'}")
+            await msg.delete()
+            logger.info(f"Deleted message in group {g_id}")
         except Exception as e:
-            logger.error(f"Failed to delete message in group {group_id}: {e}")
+            logger.error(f"Failed to delete a flagged message in group {g_id}: {e}")
 
-# ------------------- Utility Function -------------------
+# ------------------- Utility Functions -------------------
 
-def is_arabic(text):
-    """
-    Check if the text contains any Arabic characters.
-    """
+def has_arabic(text):
+    # True if there's any character in the Arabic Unicode range
     return bool(re.search(r'[\u0600-\u06FF]', text))
 
-# ------------------- Error Handler -------------------
-
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Handle errors that occur during updates.
-    """
-    logger.error("An error occurred:", exc_info=context.error)
-
-# ------------------- Additional Utility Function -------------------
+    logger.error("Error in the bot:", exc_info=context.error)
 
 async def remove_deletion_flag_after_timeout(group_id):
-    """
-    Remove the deletion flag for a group after a specified timeout.
-    """
     await asyncio.sleep(MESSAGE_DELETE_TIMEFRAME)
     delete_all_messages_after_removal.pop(group_id, None)
-    logger.info(f"Removed message deletion flag for group {group_id} after timeout.")
+    logger.info(f"Deletion flag removed for group {group_id}")
 
-# ------------------- Be Sad and Be Happy Commands -------------------
+# ------------------- Commands to toggle Arabic deletion -------------------
 
 async def be_sad_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle the /be_sad command to enable message deletion in a group.
-    Usage: /be_sad <group_id>
+    /be_sad <group_id> – enable deletion of Arabic messages
     """
     user = update.effective_user
-    args = context.args
-    logger.debug(f"/be_sad called by user {user.id} with args: {args}")
-
-    # Check if the user is authorized
     if user.id != ALLOWED_USER_ID:
-        return  # Only respond to authorized user
+        return
 
-    if len(args) != 1:
-        message = escape_markdown("⚠️ Usage: `/be_sad <group_id>`", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Incorrect usage of /be_sad by user {user.id}")
+    if len(context.args) != 1:
+        msg = escape_markdown("⚠️ Usage: `/be_sad <group_id>`", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
 
     try:
-        group_id = int(args[0])
+        g_id = int(context.args[0])
     except ValueError:
-        message = escape_markdown("⚠️ `group_id` must be an integer.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Non-integer group_id provided to /be_sad by user {user.id}")
+        msg = escape_markdown("⚠️ group_id must be integer.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
 
-    # Enable deletion
     try:
-        enable_deletion(group_id)
-    except Exception:
-        message = escape_markdown("⚠️ Failed to enable message deletion. Please try again later.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        return
-
-    # Confirm to the user
-    confirmation_message = escape_markdown(
-        f"✅ Message deletion enabled for group `{group_id}`.",
-        version=2
-    )
-    await context.bot.send_message(
-        chat_id=user.id,
-        text=confirmation_message,
-        parse_mode='MarkdownV2'
-    )
-    logger.info(f"User {user.id} enabled message deletion for group {group_id}.")
+        enable_deletion(g_id)
+        cf = escape_markdown(f"✅ Arabic deletion enabled for group `{g_id}`.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=cf, parse_mode='MarkdownV2')
+    except Exception as e:
+        logger.error(f"Error enabling deletion for group {g_id}: {e}")
+        err = escape_markdown("⚠️ Could not enable. Check logs.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=err, parse_mode='MarkdownV2')
 
 async def be_happy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle the /be_happy command to disable message deletion in a group.
-    Usage: /be_happy <group_id>
+    /be_happy <group_id> – disable deletion of Arabic messages
     """
     user = update.effective_user
-    args = context.args
-    logger.debug(f"/be_happy called by user {user.id} with args: {args}")
-
-    # Check if the user is authorized
     if user.id != ALLOWED_USER_ID:
-        return  # Only respond to authorized user
+        return
 
-    if len(args) != 1:
-        message = escape_markdown("⚠️ Usage: `/be_happy <group_id>`", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Incorrect usage of /be_happy by user {user.id}")
+    if len(context.args) != 1:
+        msg = escape_markdown("⚠️ Usage: `/be_happy <group_id>`", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
 
     try:
-        group_id = int(args[0])
+        g_id = int(context.args[0])
     except ValueError:
-        message = escape_markdown("⚠️ `group_id` must be an integer.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Non-integer group_id provided to /be_happy by user {user.id}")
+        msg = escape_markdown("⚠️ group_id must be integer.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
 
-    # Disable deletion
     try:
-        disable_deletion(group_id)
-    except Exception:
-        message = escape_markdown("⚠️ Failed to disable message deletion. Please try again later.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        return
-
-    # Confirm to the user
-    confirmation_message = escape_markdown(
-        f"✅ Message deletion disabled for group `{group_id}`.",
-        version=2
-    )
-    await context.bot.send_message(
-        chat_id=user.id,
-        text=confirmation_message,
-        parse_mode='MarkdownV2'
-    )
-    logger.info(f"User {user.id} disabled message deletion for group {group_id}.")
+        disable_deletion(g_id)
+        cf = escape_markdown(f"✅ Arabic deletion disabled for group `{g_id}`.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=cf, parse_mode='MarkdownV2')
+    except Exception as e:
+        logger.error(f"Error disabling deletion for group {g_id}: {e}")
+        err = escape_markdown("⚠️ Could not disable. Check logs.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=err, parse_mode='MarkdownV2')
 
 # ------------------- Check Command -------------------
 
 async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle the /check command to verify the 'Removed Users' list for a specific group.
-    Usage: /check <group_id>
+    /check <group_id> – verify 'Removed Users' vs. actual group membership
     """
     user = update.effective_user
-    logger.debug(f"/check command called by user {user.id} with args: {context.args}")
-
-    # Verify that the command is used by the authorized user
     if user.id != ALLOWED_USER_ID:
-        logger.warning(f"Unauthorized access attempt by user {user.id} for /check command.")
-        return  # Do not respond to unauthorized users
+        return
 
-    # Check if the correct number of arguments is provided
     if len(context.args) != 1:
-        message = escape_markdown("⚠️ Usage: `/check <group_id>`", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Incorrect usage of /check by user {user.id}. Provided args: {context.args}")
+        msg = escape_markdown("⚠️ Usage: `/check <group_id>`", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
 
-    # Parse the group_id
     try:
-        group_id = int(context.args[0])
-        logger.debug(f"Parsed group_id: {group_id}")
+        g_id = int(context.args[0])
     except ValueError:
-        message = escape_markdown("⚠️ `group_id` must be an integer.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Non-integer group_id provided to /check by user {user.id}: {context.args[0]}")
+        msg = escape_markdown("⚠️ group_id must be integer.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
 
-    # Check if the group exists in the database
-    if not group_exists(group_id):
-        message = escape_markdown(f"⚠️ Group `{group_id}` is not registered. Please add it using `/group_add {group_id}`.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Attempted to check unregistered group {group_id} by user {user.id}")
+    if not group_exists(g_id):
+        wr = escape_markdown(f"⚠️ Group `{g_id}` is not registered.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=wr, parse_mode='MarkdownV2')
         return
 
-    # Fetch removed users from the database for the specified group
+    # fetch removed users
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
-        c.execute('SELECT user_id FROM removed_users WHERE group_id = ?', (group_id,))
-        removed_users = [row[0] for row in c.fetchall()]
+        c.execute('SELECT user_id FROM removed_users WHERE group_id = ?', (g_id,))
+        removed_list = [row[0] for row in c.fetchall()]
         conn.close()
-        logger.debug(f"Fetched removed users for group {group_id}: {removed_users}")
     except Exception as e:
-        logger.error(f"Error fetching removed users for group {group_id}: {e}")
-        message = escape_markdown("⚠️ Failed to retrieve removed users from the database.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
+        logger.error(f"Error fetching removed users from group {g_id}: {e}")
+        ef = escape_markdown("⚠️ DB error while fetching removed users.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=ef, parse_mode='MarkdownV2')
         return
 
-    if not removed_users:
-        message = escape_markdown(f"⚠️ No removed users found for group `{group_id}`.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.info(f"No removed users to check for group {group_id} by user {user.id}")
+    if not removed_list:
+        msg = escape_markdown(f"⚠️ No removed users found for group `{g_id}`.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
         return
 
-    # Initialize lists to track user statuses
-    users_still_in_group = []
-    users_not_in_group = []
+    still_in = []
+    not_in = []
 
-    # Check each user's membership status in the group
-    for user_id in removed_users:
+    for uid in removed_list:
         try:
-            member = await context.bot.get_chat_member(chat_id=group_id, user_id=user_id)
-            status = member.status
-            if status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
-                users_still_in_group.append(user_id)
-                logger.debug(f"User {user_id} is still a member of group {group_id}. Status: {status}")
+            member = await context.bot.get_chat_member(chat_id=g_id, user_id=uid)
+            if member.status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
+                still_in.append(uid)
             else:
-                users_not_in_group.append(user_id)
-                logger.debug(f"User {user_id} is not a member of group {group_id}. Status: {status}")
+                not_in.append(uid)
         except Exception as e:
-            # If the bot cannot fetch the member's status, assume the user is not in the group
-            users_not_in_group.append(user_id)
-            logger.error(f"Error fetching chat member status for user {user_id} in group {group_id}: {e}")
+            logger.error(f"Error getting chat member: user={uid}, group={g_id}. {e}")
+            # If it fails to fetch, we assume user is not in group
+            not_in.append(uid)
 
-    # Prepare the report message
-    msg = f"*Check Results for Group `{group_id}`:*\n\n"
+    resp = f"*Check Results for Group `{g_id}`:*\n\n"
 
-    if users_still_in_group:
-        msg += "*Users still in the group:* \n"
-        for uid in users_still_in_group:
-            msg += f"• `{uid}`\n"
-        msg += "\n"
+    if still_in:
+        resp += "*Users still in the group (despite being in removed list):*\n"
+        for x in still_in:
+            resp += f"• `{x}`\n"
+        resp += "\n"
     else:
-        msg += "*All removed users are not present in the group.*\n\n"
+        resp += "All removed users are indeed out of the group.\n\n"
 
-    if users_not_in_group:
-        msg += "*Users not in the group:* \n"
-        for uid in users_not_in_group:
-            msg += f"• `{uid}`\n"
-        msg += "\n"
+    if not_in:
+        resp += "*Users not in the group (OK):*\n"
+        for x in not_in:
+            resp += f"• `{x}`\n"
+        resp += "\n"
 
-    # Send the report to the authorized user
     try:
         await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(msg, version=2),
+            text=escape_markdown(resp, version=2),
             parse_mode='MarkdownV2'
         )
-        logger.info(f"Check completed for group {group_id} by user {user.id}")
     except Exception as e:
-        logger.error(f"Error sending check results to user {user.id}: {e}")
-        message = escape_markdown("⚠️ An error occurred while sending the check results.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        return
+        logger.error(f"Error sending check results: {e}")
+        msg = escape_markdown("⚠️ Error sending check results.", version=2)
+        await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='MarkdownV2')
 
-    # Optionally, automatically remove users who are still in the group
-    if users_still_in_group:
-        for uid in users_still_in_group:
+    # Optionally auto-ban those still in group
+    if still_in:
+        for x in still_in:
             try:
-                await context.bot.ban_chat_member(chat_id=group_id, user_id=uid)
-                logger.info(f"User {uid} has been removed from group {group_id} via /check command.")
+                await context.bot.ban_chat_member(chat_id=g_id, user_id=x)
+                logger.info(f"Auto-banned user {x} from group {g_id} via /check.")
             except Exception as e:
-                logger.error(f"Failed to remove user {uid} from group {group_id}: {e}")
+                logger.error(f"Failed to ban user {x} from group {g_id}: {e}")
 
-# ------------------- Handle Pending Removal -------------------
-
-async def handle_pending_removal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Handle the user's response to remove a user from the 'Removed Users' list.
-    Expected to receive a user_id in the message.
-    """
-    user = update.effective_user
-    message_text = update.message.text.strip()
-    logger.debug(f"handle_pending_removal called by user {user.id} with message: {message_text}")
-    
-    if user.id not in pending_user_removals:
-        # No pending removal
-        warning_message = escape_markdown("⚠️ No pending removal found. Please use the appropriate command.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=warning_message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"User {user.id} attempted to remove a user without pending removal.")
-        return
-    
-    group_id = pending_user_removals.pop(user.id)
-    
-    try:
-        target_user_id = int(message_text)
-    except ValueError:
-        message = escape_markdown("⚠️ `user_id` must be an integer.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.warning(f"Non-integer user_id provided to handle_pending_removal by user {user.id}: {message_text}")
-        return
-    
-    # Check if the user is in 'Removed Users' list for the group
-    try:
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
-        c.execute('SELECT 1 FROM removed_users WHERE group_id = ? AND user_id = ?', (group_id, target_user_id))
-        if not c.fetchone():
-            conn.close()
-            message = escape_markdown(f"⚠️ User `{target_user_id}` is not in the 'Removed Users' list for group `{group_id}`.", version=2)
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=message,
-                parse_mode='MarkdownV2'
-            )
-            logger.warning(f"User {target_user_id} not in 'Removed Users' for group {group_id} during removal by user {user.id}")
-            return
-        # Proceed to remove
-        c.execute('DELETE FROM removed_users WHERE group_id = ? AND user_id = ?', (group_id, target_user_id))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        message = escape_markdown("⚠️ Failed to remove user from 'Removed Users'. Please try again later.", version=2)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=message,
-            parse_mode='MarkdownV2'
-        )
-        logger.error(f"Error removing user {target_user_id} from 'Removed Users' for group {group_id}: {e}")
-        return
-    
-    # Optionally, revoke permissions if necessary
-    try:
-        revoke_user_permissions(target_user_id)
-    except Exception as e:
-        logger.error(f"Error revoking permissions for user {target_user_id}: {e}")
-        # Not critical to send message; user is removed from 'Removed Users' list
-        # So we can proceed
-    
-    confirmation_message = escape_markdown(
-        f"✅ User `{target_user_id}` has been removed from the 'Removed Users' list for group `{group_id}`.",
-        version=2
-    )
-    try:
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=confirmation_message,
-            parse_mode='MarkdownV2'
-        )
-        logger.info(f"Removed user {target_user_id} from 'Removed Users' for group {group_id} by user {user.id}")
-    except Exception as e:
-        logger.error(f"Error sending confirmation message for handle_pending_removal: {e}")
-
-# ------------------- Main Function -------------------
+# ------------------- main() -------------------
 
 def main():
     """
-    Main function to initialize the bot and register handlers.
+    Initialize DB and run the bot with all handlers.
     """
     try:
         init_db()
     except Exception as e:
-        logger.critical(f"Bot cannot start due to database initialization failure: {e}")
-        sys.exit(f"Bot cannot start due to database initialization failure: {e}")
+        logger.critical(f"Cannot start bot: DB init failure: {e}")
+        sys.exit("DB initialization failed.")
 
     TOKEN = os.getenv('BOT_TOKEN')
     if not TOKEN:
-        logger.error("⚠️ BOT_TOKEN is not set.")
-        sys.exit("⚠️ BOT_TOKEN is not set.")
+        logger.error("BOT_TOKEN not set.")
+        sys.exit("BOT_TOKEN not set.")
     TOKEN = TOKEN.strip()
     if TOKEN.lower().startswith('bot='):
         TOKEN = TOKEN[len('bot='):].strip()
-        logger.warning("BOT_TOKEN should not include 'bot=' prefix. Stripping it.")
+        logger.warning("Stripped 'bot=' prefix from BOT_TOKEN.")
 
     try:
-        application = ApplicationBuilder().token(TOKEN).build()
+        app = ApplicationBuilder().token(TOKEN).build()
     except Exception as e:
-        logger.critical(f"Failed to build the application with the provided TOKEN: {e}")
-        sys.exit(f"Failed to build the application with the provided TOKEN: {e}")
+        logger.critical(f"Failed to build the application: {e}")
+        sys.exit(f"Failed to build the application: {e}")
 
-    # Register command handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("group_add", group_add_cmd))
-    application.add_handler(CommandHandler("rmove_group", rmove_group_cmd))
-    application.add_handler(CommandHandler("bypass", bypass_cmd))
-    application.add_handler(CommandHandler("unbypass", unbypass_cmd))
-    application.add_handler(CommandHandler("group_id", group_id_cmd))
-    application.add_handler(CommandHandler("show", show_groups_cmd))
-    application.add_handler(CommandHandler("info", info_cmd))
-    application.add_handler(CommandHandler("help", help_cmd))
-    application.add_handler(CommandHandler("list", show_groups_cmd))  # Assuming /list is similar to /show
-    application.add_handler(CommandHandler("be_sad", be_sad_cmd))
-    application.add_handler(CommandHandler("be_happy", be_happy_cmd))
-    application.add_handler(CommandHandler("rmove_user", rmove_user_cmd))  # Existing Command
-    application.add_handler(CommandHandler("add_removed_user", add_removed_user_cmd))  # New Command
-    application.add_handler(CommandHandler("list_removed_users", list_removed_users_cmd))  # New Command
-    application.add_handler(CommandHandler("list_rmoved_rmove", list_rmoved_rmove_cmd))  # New Command
-    application.add_handler(CommandHandler("check", check_cmd))  # Ensure only one /check handler
+    # Register commands
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("group_add", group_add_cmd))
+    app.add_handler(CommandHandler("rmove_group", rmove_group_cmd))
+    app.add_handler(CommandHandler("bypass", bypass_cmd))
+    app.add_handler(CommandHandler("unbypass", unbypass_cmd))
+    app.add_handler(CommandHandler("group_id", group_id_cmd))
+    app.add_handler(CommandHandler("show", show_groups_cmd))
+    app.add_handler(CommandHandler("list", show_groups_cmd))
+    app.add_handler(CommandHandler("info", info_cmd))
+    app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("be_sad", be_sad_cmd))
+    app.add_handler(CommandHandler("be_happy", be_happy_cmd))
+    app.add_handler(CommandHandler("rmove_user", rmove_user_cmd))
+    app.add_handler(CommandHandler("add_removed_user", add_removed_user_cmd))
+    app.add_handler(CommandHandler("list_removed_users", list_removed_users_cmd))
+    app.add_handler(CommandHandler("unremove_user", unremove_user_cmd))
+    app.add_handler(CommandHandler("check", check_cmd))
 
-    # Register message handler for private messages
-    # This single handler will manage both group name assignments and user removals
-    application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
-        handle_private_message
-    ))
-
-    # Register message handlers for group chats
-    # 1. Handle deleting Arabic messages
-    application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
+    # Message handlers
+    # 1) Delete if Arabic found in text or caption (and now PDFs/images)
+    app.add_handler(MessageHandler(
+        filters.TEXT | filters.CAPTION | filters.Document.ALL | filters.PHOTO,
         delete_arabic_messages
     ))
 
-    # 2. Handle any messages to delete during the deletion flag
-    application.add_handler(MessageHandler(
+    # 2) Delete flagged
+    app.add_handler(MessageHandler(
         filters.ALL & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
         delete_any_messages
     ))
 
-    # Register error handler
-    application.add_error_handler(error_handler)
+    # 3) Private (handle group name)
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+        handle_private_message
+    ))
 
-    logger.info("🚀 Bot starting...")
+    # Errors
+    app.add_error_handler(error_handler)
+
+    logger.info("Bot starting up...")
     try:
-        application.run_polling()
+        app.run_polling()
     except Exception as e:
-        logger.critical(f"Bot encountered a critical error and is shutting down: {e}")
-        sys.exit(f"Bot encountered a critical error and is shutting down: {e}")
+        logger.critical(f"Critical error, shutting down: {e}")
+        sys.exit("Bot crashed.")
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
