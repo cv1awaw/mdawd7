@@ -57,7 +57,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# If a user is "member", "administrator", or "creator", we can't restrict them if they're an admin or creator
+# Allowed user statuses
 ALLOWED_STATUSES = ("member", "administrator", "creator")
 
 # In-memory dict for group name requests
@@ -156,7 +156,8 @@ def init_db():
         c.execute('''
             CREATE TABLE IF NOT EXISTS deletion_settings (
                 group_id INTEGER PRIMARY KEY,
-                enabled BOOLEAN NOT NULL DEFAULT 0,
+                delete_commands BOOLEAN NOT NULL DEFAULT 1,
+                mute_users BOOLEAN NOT NULL DEFAULT 1,
                 FOREIGN KEY(group_id) REFERENCES groups(group_id)
             )
         ''')
@@ -190,6 +191,11 @@ def add_group(group_id):
             INSERT OR IGNORE INTO groups (group_id, group_name)
             VALUES (?, ?)
         """, (group_id, None))
+        # Initialize deletion_settings with defaults
+        c.execute("""
+            INSERT OR IGNORE INTO deletion_settings (group_id, delete_commands, mute_users)
+            VALUES (?, 1, 1)
+        """, (group_id,))
         conn.commit()
         conn.close()
         logger.info(f"Added group {group_id} to DB.")
@@ -263,48 +269,92 @@ def remove_bypass_user(user_id):
         logger.error(f"Error removing user {user_id} from bypass list: {e}")
         return False
 
-def enable_deletion(group_id):
+def enable_delete_commands(group_id):
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
         c.execute("""
-            INSERT INTO deletion_settings (group_id, enabled)
-            VALUES (?, 1)
-            ON CONFLICT(group_id) DO UPDATE SET enabled=1
+            UPDATE deletion_settings
+            SET delete_commands=1
+            WHERE group_id=?
         """, (group_id,))
         conn.commit()
         conn.close()
-        logger.info(f"Enabled Arabic deletion for group {group_id}.")
+        logger.info(f"Enabled delete_commands for group {group_id}.")
     except Exception as e:
-        logger.error(f"Error enabling deletion for group {group_id}: {e}")
+        logger.error(f"Error enabling delete_commands for group {group_id}: {e}")
         raise
 
-def disable_deletion(group_id):
+def disable_delete_commands(group_id):
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
         c.execute("""
-            INSERT INTO deletion_settings (group_id, enabled)
-            VALUES (?, 0)
-            ON CONFLICT(group_id) DO UPDATE SET enabled=0
+            UPDATE deletion_settings
+            SET delete_commands=0
+            WHERE group_id=?
         """, (group_id,))
         conn.commit()
         conn.close()
-        logger.info(f"Disabled Arabic deletion for group {group_id}.")
+        logger.info(f"Disabled delete_commands for group {group_id}.")
     except Exception as e:
-        logger.error(f"Error disabling deletion for group {group_id}: {e}")
+        logger.error(f"Error disabling delete_commands for group {group_id}: {e}")
         raise
 
-def is_deletion_enabled(group_id):
+def enable_mute_users(group_id):
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
-        c.execute('SELECT enabled FROM deletion_settings WHERE group_id=?', (group_id,))
+        c.execute("""
+            UPDATE deletion_settings
+            SET mute_users=1
+            WHERE group_id=?
+        """, (group_id,))
+        conn.commit()
+        conn.close()
+        logger.info(f"Enabled mute_users for group {group_id}.")
+    except Exception as e:
+        logger.error(f"Error enabling mute_users for group {group_id}: {e}")
+        raise
+
+def disable_mute_users(group_id):
+    try:
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        c.execute("""
+            UPDATE deletion_settings
+            SET mute_users=0
+            WHERE group_id=?
+        """, (group_id,))
+        conn.commit()
+        conn.close()
+        logger.info(f"Disabled mute_users for group {group_id}.")
+    except Exception as e:
+        logger.error(f"Error disabling mute_users for group {group_id}: {e}")
+        raise
+
+def is_delete_commands_enabled(group_id):
+    try:
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        c.execute('SELECT delete_commands FROM deletion_settings WHERE group_id=?', (group_id,))
         row = c.fetchone()
         conn.close()
         return bool(row and row[0])
     except Exception as e:
-        logger.error(f"Error checking deletion for group {group_id}: {e}")
+        logger.error(f"Error checking delete_commands for group {group_id}: {e}")
+        return False
+
+def is_mute_users_enabled(group_id):
+    try:
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        c.execute('SELECT mute_users FROM deletion_settings WHERE group_id=?', (group_id,))
+        row = c.fetchone()
+        conn.close()
+        return bool(row and row[0])
+    except Exception as e:
+        logger.error(f"Error checking mute_users for group {group_id}: {e}")
         return False
 
 def revoke_user_permissions(user_id):
@@ -399,6 +449,10 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/check <group_id>` – Validate 'Removed Users' vs actual membership.\n"
         "• `/link <group_id>` – Create one-time invite link.\n"
         "• `/permission_type` – Show valid `<permission_type>` for `/limit`.\n"
+        "• `/enable_delete <group_id>` – Enable deletion of unauthorized commands.\n"
+        "• `/disable_delete <group_id>` – Disable deletion of unauthorized commands.\n"
+        "• `/enable_mute <group_id>` – Enable muting of users who send unauthorized commands.\n"
+        "• `/disable_mute <group_id>` – Disable muting of users who send unauthorized commands.\n"
         "\n"
         "*Note:* The bot must be *admin* with 'can_restrict_members' to effectively mute/limit.\n"
     )
@@ -482,6 +536,7 @@ async def rmove_group_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
         c.execute('DELETE FROM groups WHERE group_id=?', (g_id,))
+        c.execute('DELETE FROM deletion_settings WHERE group_id=?', (g_id,))
         changes = c.rowcount
         conn.commit()
         conn.close()
@@ -1036,27 +1091,35 @@ async def unauthorized_command_handler(update: Update, context: ContextTypes.DEF
     # Log the unauthorized attempt
     logger.info(f"Received unauthorized command from user {user.id} in chat {chat_id}: {msg.text}")
 
-    # Delete the message
-    try:
-        await msg.delete()
-        logger.info(f"Deleted unauthorized message from user {user.id} in group {chat_id}.")
-    except Exception as e:
-        logger.error(f"Failed to delete message: {e}")
+    # Check if delete_commands is enabled
+    delete_enabled = is_delete_commands_enabled(chat_id)
 
-    # Mute the user for one hour
-    until_date = datetime.utcnow() + timedelta(hours=1)
-    perms = ChatPermissions(can_send_messages=False)
+    # Check if mute_users is enabled
+    mute_enabled = is_mute_users_enabled(chat_id)
 
-    try:
-        await context.bot.restrict_chat_member(
-            chat_id=chat_id,
-            user_id=user.id,
-            permissions=perms,
-            until_date=until_date
-        )
-        logger.info(f"Muted user {user.id} in group {chat_id} for one hour due to unauthorized command.")
-    except Exception as e:
-        logger.error(f"Failed to mute user {user.id} in group {chat_id}: {e}")
+    # Delete the message if enabled
+    if delete_enabled:
+        try:
+            await msg.delete()
+            logger.info(f"Deleted unauthorized message from user {user.id} in group {chat_id}.")
+        except Exception as e:
+            logger.error(f"Failed to delete message: {e}")
+
+    # Mute the user if enabled
+    if mute_enabled:
+        until_date = datetime.utcnow() + timedelta(hours=1)
+        perms = ChatPermissions(can_send_messages=False)
+
+        try:
+            await context.bot.restrict_chat_member(
+                chat_id=chat_id,
+                user_id=user.id,
+                permissions=perms,
+                until_date=until_date
+            )
+            logger.info(f"Muted user {user.id} in group {chat_id} for one hour due to unauthorized command.")
+        except Exception as e:
+            logger.error(f"Failed to mute user {user.id} in group {chat_id}: {e}")
 
 # ------------------- /be_sad & /be_happy & /check & /link Commands -------------------
 
@@ -1263,6 +1326,11 @@ def main():
     app.add_handler(CommandHandler("check", check_cmd))
     app.add_handler(CommandHandler("link", link_cmd))
     app.add_handler(CommandHandler("permission_type", permission_type_cmd))
+    # New Commands for Deletion and Mute Control
+    app.add_handler(CommandHandler("enable_delete", enable_delete_cmd))
+    app.add_handler(CommandHandler("disable_delete", disable_delete_cmd))
+    app.add_handler(CommandHandler("enable_mute", enable_mute_cmd))
+    app.add_handler(CommandHandler("disable_mute", disable_mute_cmd))
 
     # ------------------- Unauthorized Command Handler -------------------
     # Register unauthorized command handler BEFORE other message handlers
@@ -1285,8 +1353,148 @@ def main():
     # Error handler
     app.add_error_handler(error_handler)
 
-    logger.info("Bot starting with improved /limit checks, /unmute command, and unauthorized command handling.")
+    logger.info("Bot starting with separated delete and mute functionalities.")
     app.run_polling()
+
+# ------------------- New Command Handlers for Enable/Disable -------------------
+
+async def enable_delete_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /enable_delete <group_id> – Enable deletion of unauthorized commands in the specified group.
+    """
+    user = update.effective_user
+    if user.id != ALLOWED_USER_ID:
+        return
+
+    if len(context.args) != 1:
+        msg = "⚠️ Usage: `/enable_delete <group_id>`"
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(msg, version=2), parse_mode='MarkdownV2')
+        return
+
+    try:
+        g_id = int(context.args[0])
+    except:
+        w = "⚠️ group_id must be integer."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(w, version=2), parse_mode='MarkdownV2')
+        return
+
+    if not group_exists(g_id):
+        wr = f"⚠️ Group `{g_id}` is not registered."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(wr, version=2), parse_mode='MarkdownV2')
+        return
+
+    try:
+        enable_delete_commands(g_id)
+        cf = f"✅ Deletion of unauthorized commands enabled for group `{g_id}`."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(cf, version=2), parse_mode='MarkdownV2')
+    except Exception as e:
+        logger.error(f"Error enabling delete_commands for group {g_id}: {e}")
+        err = "⚠️ Could not enable deletion. Check logs."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
+
+async def disable_delete_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /disable_delete <group_id> – Disable deletion of unauthorized commands in the specified group.
+    """
+    user = update.effective_user
+    if user.id != ALLOWED_USER_ID:
+        return
+
+    if len(context.args) != 1:
+        msg = "⚠️ Usage: `/disable_delete <group_id>`"
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(msg, version=2), parse_mode='MarkdownV2')
+        return
+
+    try:
+        g_id = int(context.args[0])
+    except:
+        w = "⚠️ group_id must be integer."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(w, version=2), parse_mode='MarkdownV2')
+        return
+
+    if not group_exists(g_id):
+        wr = f"⚠️ Group `{g_id}` is not registered."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(wr, version=2), parse_mode='MarkdownV2')
+        return
+
+    try:
+        disable_delete_commands(g_id)
+        cf = f"✅ Deletion of unauthorized commands disabled for group `{g_id}`."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(cf, version=2), parse_mode='MarkdownV2')
+    except Exception as e:
+        logger.error(f"Error disabling delete_commands for group {g_id}: {e}")
+        err = "⚠️ Could not disable deletion. Check logs."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
+
+async def enable_mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /enable_mute <group_id> – Enable muting of users who send unauthorized commands in the specified group.
+    """
+    user = update.effective_user
+    if user.id != ALLOWED_USER_ID:
+        return
+
+    if len(context.args) != 1:
+        msg = "⚠️ Usage: `/enable_mute <group_id>`"
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(msg, version=2), parse_mode='MarkdownV2')
+        return
+
+    try:
+        g_id = int(context.args[0])
+    except:
+        w = "⚠️ group_id must be integer."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(w, version=2), parse_mode='MarkdownV2')
+        return
+
+    if not group_exists(g_id):
+        wr = f"⚠️ Group `{g_id}` is not registered."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(wr, version=2), parse_mode='MarkdownV2')
+        return
+
+    try:
+        enable_mute_users(g_id)
+        cf = f"✅ Muting of users who send unauthorized commands enabled for group `{g_id}`."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(cf, version=2), parse_mode='MarkdownV2')
+    except Exception as e:
+        logger.error(f"Error enabling mute_users for group {g_id}: {e}")
+        err = "⚠️ Could not enable muting. Check logs."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
+
+async def disable_mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /disable_mute <group_id> – Disable muting of users who send unauthorized commands in the specified group.
+    """
+    user = update.effective_user
+    if user.id != ALLOWED_USER_ID:
+        return
+
+    if len(context.args) != 1:
+        msg = "⚠️ Usage: `/disable_mute <group_id>`"
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(msg, version=2), parse_mode='MarkdownV2')
+        return
+
+    try:
+        g_id = int(context.args[0])
+    except:
+        w = "⚠️ group_id must be integer."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(w, version=2), parse_mode='MarkdownV2')
+        return
+
+    if not group_exists(g_id):
+        wr = f"⚠️ Group `{g_id}` is not registered."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(wr, version=2), parse_mode='MarkdownV2')
+        return
+
+    try:
+        disable_mute_users(g_id)
+        cf = f"✅ Muting of users who send unauthorized commands disabled for group `{g_id}`."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(cf, version=2), parse_mode='MarkdownV2')
+    except Exception as e:
+        logger.error(f"Error disabling mute_users for group {g_id}: {e}")
+        err = "⚠️ Could not disable muting. Check logs."
+        await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
+
+# ------------------- main() -------------------
 
 if __name__ == "__main__":
     main()
