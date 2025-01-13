@@ -966,7 +966,7 @@ async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_T
                     extracted = pytesseract.image_to_string(Image.open(tmp_img.name)) or ""
                     if has_arabic(extracted):
                         await msg.delete()
-                        logger.info(f"Deleted image with Arabic from {user.id} in {chat_id}.")
+                        logger.info(f"Deleted image with Arabic from user {user.id} in {chat_id}.")
                 except Exception as e:
                     logger.error(f"OCR error: {e}")
                 finally:
@@ -1166,6 +1166,47 @@ async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         err = "⚠️ Could not create invite link. Check bot admin rights & logs."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
 
+# ------------------- Message Handlers -------------------
+
+# Existing handlers
+# This handler processes messages containing Arabic text, PDFs, or photos with Arabic content
+app_deletion_message_handler = MessageHandler(
+    filters.TEXT | filters.CAPTION | filters.Document.ALL | filters.PHOTO,
+    delete_arabic_messages
+)
+
+# Modify the delete_any_messages handler to exclude commands
+app_delete_any_messages_handler = MessageHandler(
+    filters.ALL & ~filters.COMMAND,  # Exclude command messages
+    delete_any_messages
+)
+
+# Handler for group name replies
+app_group_name_reply_handler = MessageHandler(
+    filters.TEXT & ~filters.COMMAND,
+    handle_group_name_reply
+)
+
+# New handler to delete unauthorized command messages
+async def delete_unauthorized_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ALLOWED_USER_ID:
+        try:
+            await update.message.delete()
+            logger.info(f"Deleted unauthorized command from user {user.id} in group {update.message.chat.id}.")
+            # Optional: Inform the user that they are not authorized
+            await context.bot.send_message(
+                chat_id=user.id,
+                text="⚠️ You are not authorized to use this command."
+            )
+        except Exception as e:
+            logger.error(f"Failed to delete unauthorized command: {e}")
+
+app_delete_unauthorized_commands_handler = MessageHandler(
+    filters.COMMAND,
+    delete_unauthorized_commands
+)
+
 # ------------------- main() -------------------
 
 def main():
@@ -1209,18 +1250,12 @@ def main():
     app.add_handler(CommandHandler("permission_type", permission_type_cmd))
 
     # Message handlers
-    app.add_handler(MessageHandler(
-        filters.TEXT | filters.CAPTION | filters.Document.ALL | filters.PHOTO,
-        delete_arabic_messages
-    ))
-    app.add_handler(MessageHandler(
-        filters.ALL,
-        delete_any_messages
-    ))
-    app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        handle_group_name_reply
-    ))
+    app.add_handler(app_deletion_message_handler)
+    app.add_handler(app_delete_any_messages_handler)
+    app.add_handler(app_group_name_reply_handler)
+
+    # New handler to delete unauthorized commands
+    app.add_handler(app_delete_unauthorized_commands_handler)
 
     app.add_error_handler(error_handler)
 
