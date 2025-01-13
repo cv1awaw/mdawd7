@@ -46,7 +46,7 @@ from telegram.helpers import escape_markdown
 DATABASE = 'warnings.db'
 ALLOWED_USER_ID = 6177929931  # Replace with your own Telegram user ID
 LOCK_FILE = '/tmp/telegram_bot.lock'
-MESSAGE_DELETE_TIMEFRAME = 15
+MESSAGE_DELETE_TIMEFRAME = 15  # Seconds
 
 # ------------------- Logging Setup -------------------
 
@@ -197,7 +197,7 @@ def set_group_name(group_id, name):
         conn.close()
         logger.info(f"Group {group_id} name set to '{name}'.")
     except Exception as e:
-        logger.error(f"Error setting name for group {group_id}: {e}")
+        logger.error(f"Error setting group name for {group_id}: {e}")
         raise
 
 def group_exists(group_id):
@@ -307,7 +307,7 @@ def revoke_user_permissions(user_id):
         conn.close()
         logger.info(f"Revoked permissions for user {user_id} (role='removed').")
     except Exception as e:
-        logger.error(f"Error revoking perms for {user_id}: {e}")
+        logger.error(f"Error revoking perms for user {user_id}: {e}")
         raise
 
 def remove_user_from_removed_users(group_id, user_id):
@@ -942,7 +942,7 @@ async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_T
                                 all_text += page.extract_text() or ""
                             if has_arabic(all_text):
                                 await msg.delete()
-                                logger.info(f"Deleted PDF with Arabic from user {user.id} in {chat_id}.")
+                                logger.info(f"Deleted PDF with Arabic from user {user.id} in group {chat_id}.")
                         except Exception as e:
                             logger.error(f"PyPDF2 read error: {e}")
                 except Exception as e:
@@ -966,7 +966,7 @@ async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_T
                     extracted = pytesseract.image_to_string(Image.open(tmp_img.name)) or ""
                     if has_arabic(extracted):
                         await msg.delete()
-                        logger.info(f"Deleted image with Arabic from user {user.id} in {chat_id}.")
+                        logger.info(f"Deleted image with Arabic from user {user.id} in group {chat_id}.")
                 except Exception as e:
                     logger.error(f"OCR error: {e}")
                 finally:
@@ -1001,6 +1001,33 @@ async def remove_deletion_flag_after_timeout(group_id):
     if group_id in delete_all_messages_after_removal:
         delete_all_messages_after_removal.pop(group_id, None)
         logger.info(f"Deletion flag removed for group {group_id}")
+
+# ------------------- Unauthorized Command Deletion Handler -------------------
+
+async def delete_unauthorized_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    if not msg:
+        return
+
+    user = msg.from_user
+    chat = msg.chat
+
+    # Only process if the message is in a group or supergroup
+    if chat.type not in ["group", "supergroup"]:
+        return  # Ignore commands sent in private chats
+
+    # Delete the command message
+    try:
+        await msg.delete()
+        logger.info(f"Deleted unauthorized command from user {user.id} in group {chat.id}.")
+        
+        # Optional: Inform the user that their command was deleted
+        await context.bot.send_message(
+            chat_id=user.id,
+            text="⚠️ Your command was deleted because you're not authorized to use bot commands in groups."
+        )
+    except Exception as e:
+        logger.error(f"Failed to delete unauthorized command: {e}")
 
 # ------------------- /be_sad & /be_happy & /check & /link Commands -------------------
 
@@ -1166,46 +1193,36 @@ async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         err = "⚠️ Could not create invite link. Check bot admin rights & logs."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
 
-# ------------------- Message Handlers -------------------
+# ------------------- Unauthorized Command Deletion Handler -------------------
 
-# Existing handlers
-# This handler processes messages containing Arabic text, PDFs, or photos with Arabic content
-app_deletion_message_handler = MessageHandler(
-    filters.TEXT | filters.CAPTION | filters.Document.ALL | filters.PHOTO,
-    delete_arabic_messages
-)
-
-# Modify the delete_any_messages handler to exclude commands
-app_delete_any_messages_handler = MessageHandler(
-    filters.ALL & ~filters.COMMAND,  # Exclude command messages
-    delete_any_messages
-)
-
-# Handler for group name replies
-app_group_name_reply_handler = MessageHandler(
-    filters.TEXT & ~filters.COMMAND,
-    handle_group_name_reply
-)
-
-# New handler to delete unauthorized command messages
 async def delete_unauthorized_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if user.id != ALLOWED_USER_ID:
-        try:
-            await update.message.delete()
-            logger.info(f"Deleted unauthorized command from user {user.id} in group {update.message.chat.id}.")
-            # Optional: Inform the user that they are not authorized
-            await context.bot.send_message(
-                chat_id=user.id,
-                text="⚠️ You are not authorized to use this command."
-            )
-        except Exception as e:
-            logger.error(f"Failed to delete unauthorized command: {e}")
+    msg = update.message
+    if not msg:
+        return
 
-app_delete_unauthorized_commands_handler = MessageHandler(
-    filters.COMMAND,
-    delete_unauthorized_commands
-)
+    user = msg.from_user
+    chat = msg.chat
+
+    # Only process if the message is in a group or supergroup
+    if chat.type not in ["group", "supergroup"]:
+        return  # Ignore commands sent in private chats
+
+    # Delete the command message
+    try:
+        await msg.delete()
+        logger.info(f"Deleted unauthorized command from user {user.id} in group {chat.id}.")
+        
+        # Optional: Inform the user that their command was deleted
+        await context.bot.send_message(
+            chat_id=user.id,
+            text="⚠️ Your command was deleted because you're not authorized to use bot commands in groups."
+        )
+    except Exception as e:
+        logger.error(f"Failed to delete unauthorized command: {e}")
+
+# ------------------- /be_sad & /be_happy & /check & /link Commands -------------------
+
+# (These command handlers are already defined above.)
 
 # ------------------- main() -------------------
 
@@ -1230,33 +1247,51 @@ def main():
         logger.critical(f"Failed building Telegram app: {e}")
         sys.exit("Bot build error.")
 
-    # Register commands
-    app.add_handler(CommandHandler("start", start_cmd))
-    app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CommandHandler("group_add", group_add_cmd))
-    app.add_handler(CommandHandler("rmove_group", rmove_group_cmd))
-    app.add_handler(CommandHandler("bypass", bypass_cmd))
-    app.add_handler(CommandHandler("unbypass", unbypass_cmd))
-    app.add_handler(CommandHandler("love", love_cmd))
-    app.add_handler(CommandHandler("rmove_user", rmove_user_cmd))
-    app.add_handler(CommandHandler("mute", mute_cmd))
-    app.add_handler(CommandHandler("unmute", unmute_cmd))  # New
-    app.add_handler(CommandHandler("limit", limit_cmd))
-    app.add_handler(CommandHandler("slow", slow_cmd))
-    app.add_handler(CommandHandler("be_sad", be_sad_cmd))
-    app.add_handler(CommandHandler("be_happy", be_happy_cmd))
-    app.add_handler(CommandHandler("check", check_cmd))
-    app.add_handler(CommandHandler("link", link_cmd))
-    app.add_handler(CommandHandler("permission_type", permission_type_cmd))
+    # Register commands with PRIVATE filter
+    app.add_handler(CommandHandler("start", start_cmd, filters=filters.PRIVATE))
+    app.add_handler(CommandHandler("help", help_cmd, filters=filters.PRIVATE))
+    app.add_handler(CommandHandler("group_add", group_add_cmd, filters=filters.PRIVATE))
+    app.add_handler(CommandHandler("rmove_group", rmove_group_cmd, filters=filters.PRIVATE))
+    app.add_handler(CommandHandler("bypass", bypass_cmd, filters=filters.PRIVATE))
+    app.add_handler(CommandHandler("unbypass", unbypass_cmd, filters=filters.PRIVATE))
+    app.add_handler(CommandHandler("love", love_cmd, filters=filters.PRIVATE))
+    app.add_handler(CommandHandler("rmove_user", rmove_user_cmd, filters=filters.PRIVATE))
+    app.add_handler(CommandHandler("mute", mute_cmd, filters=filters.PRIVATE))
+    app.add_handler(CommandHandler("unmute", unmute_cmd, filters=filters.PRIVATE))  # New
+    app.add_handler(CommandHandler("limit", limit_cmd, filters=filters.PRIVATE))
+    app.add_handler(CommandHandler("slow", slow_cmd, filters=filters.PRIVATE))
+    app.add_handler(CommandHandler("be_sad", be_sad_cmd, filters=filters.PRIVATE))
+    app.add_handler(CommandHandler("be_happy", be_happy_cmd, filters=filters.PRIVATE))
+    app.add_handler(CommandHandler("check", check_cmd, filters=filters.PRIVATE))
+    app.add_handler(CommandHandler("link", link_cmd, filters=filters.PRIVATE))
+    app.add_handler(CommandHandler("permission_type", permission_type_cmd, filters=filters.PRIVATE))
 
     # Message handlers
-    app.add_handler(app_deletion_message_handler)
-    app.add_handler(app_delete_any_messages_handler)
-    app.add_handler(app_group_name_reply_handler)
+    # Handler to delete any message containing Arabic content
+    app.add_handler(MessageHandler(
+        filters.TEXT | filters.CAPTION | filters.Document.ALL | filters.PHOTO,
+        delete_arabic_messages
+    ))
 
-    # New handler to delete unauthorized commands
-    app.add_handler(app_delete_unauthorized_commands_handler)
+    # Handler to delete any message flagged for short-term deletion
+    app.add_handler(MessageHandler(
+        filters.ALL & ~filters.COMMAND,  # Exclude command messages
+        delete_any_messages
+    ))
 
+    # Handler for group name replies
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        handle_group_name_reply
+    ))
+
+    # Handler to delete any command messages in groups
+    app.add_handler(MessageHandler(
+        filters.COMMAND & (filters.GROUP | filters.SUPERGROUP),
+        delete_unauthorized_commands
+    ))
+
+    # Error handler
     app.add_error_handler(error_handler)
 
     logger.info("Bot starting with improved /limit checks & /unmute command.")
