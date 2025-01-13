@@ -1193,36 +1193,9 @@ async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         err = "⚠️ Could not create invite link. Check bot admin rights & logs."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
 
-# ------------------- Unauthorized Command Deletion Handler -------------------
+# ------------------- Message Handlers Registration -------------------
 
-async def delete_unauthorized_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.message
-    if not msg:
-        return
-
-    user = msg.from_user
-    chat = msg.chat
-
-    # Only process if the message is in a group or supergroup
-    if chat.type not in ["group", "supergroup"]:
-        return  # Ignore commands sent in private chats
-
-    # Delete the command message
-    try:
-        await msg.delete()
-        logger.info(f"Deleted unauthorized command from user {user.id} in group {chat.id}.")
-        
-        # Optional: Inform the user that their command was deleted
-        await context.bot.send_message(
-            chat_id=user.id,
-            text="⚠️ Your command was deleted because you're not authorized to use bot commands in groups."
-        )
-    except Exception as e:
-        logger.error(f"Failed to delete unauthorized command: {e}")
-
-# ------------------- /be_sad & /be_happy & /check & /link Commands -------------------
-
-# (These command handlers are already defined above.)
+# The handlers are registered within the main() function
 
 # ------------------- main() -------------------
 
