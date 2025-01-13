@@ -269,7 +269,7 @@ def remove_bypass_user(user_id):
         logger.error(f"Error removing user {user_id} from bypass list: {e}")
         return False
 
-def enable_delete_commands(group_id):
+def enable_deletion(group_id):
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
@@ -285,7 +285,7 @@ def enable_delete_commands(group_id):
         logger.error(f"Error enabling delete_commands for group {group_id}: {e}")
         raise
 
-def disable_delete_commands(group_id):
+def disable_deletion(group_id):
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
@@ -300,6 +300,18 @@ def disable_delete_commands(group_id):
     except Exception as e:
         logger.error(f"Error disabling delete_commands for group {group_id}: {e}")
         raise
+
+def is_deletion_enabled(group_id):
+    try:
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        c.execute('SELECT delete_commands FROM deletion_settings WHERE group_id=?', (group_id,))
+        row = c.fetchone()
+        conn.close()
+        return bool(row and row[0])
+    except Exception as e:
+        logger.error(f"Error checking delete_commands for group {group_id}: {e}")
+        return False
 
 def enable_mute_users(group_id):
     try:
@@ -332,18 +344,6 @@ def disable_mute_users(group_id):
     except Exception as e:
         logger.error(f"Error disabling mute_users for group {group_id}: {e}")
         raise
-
-def is_delete_commands_enabled(group_id):
-    try:
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
-        c.execute('SELECT delete_commands FROM deletion_settings WHERE group_id=?', (group_id,))
-        row = c.fetchone()
-        conn.close()
-        return bool(row and row[0])
-    except Exception as e:
-        logger.error(f"Error checking delete_commands for group {group_id}: {e}")
-        return False
 
 def is_mute_users_enabled(group_id):
     try:
@@ -1092,7 +1092,7 @@ async def unauthorized_command_handler(update: Update, context: ContextTypes.DEF
     logger.info(f"Received unauthorized command from user {user.id} in chat {chat_id}: {msg.text}")
 
     # Check if delete_commands is enabled
-    delete_enabled = is_delete_commands_enabled(chat_id)
+    delete_enabled = is_deletion_enabled(chat_id)
 
     # Check if mute_users is enabled
     mute_enabled = is_mute_users_enabled(chat_id)
@@ -1142,7 +1142,7 @@ async def be_sad_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         enable_deletion(g_id)
-        cf = f"✅ Arabic deletion enabled for group `{g_id}`."
+        cf = f"✅ Deletion of unauthorized commands enabled for group `{g_id}`."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(cf, version=2), parse_mode='MarkdownV2')
     except Exception as e:
         logger.error(f"Error enabling deletion for group {g_id}: {e}")
@@ -1168,7 +1168,7 @@ async def be_happy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         disable_deletion(g_id)
-        cf = f"✅ Arabic deletion disabled for group `{g_id}`."
+        cf = f"✅ Deletion of unauthorized commands disabled for group `{g_id}`."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(cf, version=2), parse_mode='MarkdownV2')
     except Exception as e:
         logger.error(f"Error disabling deletion for group {g_id}: {e}")
@@ -1384,7 +1384,7 @@ async def enable_delete_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        enable_delete_commands(g_id)
+        enable_deletion(g_id)
         cf = f"✅ Deletion of unauthorized commands enabled for group `{g_id}`."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(cf, version=2), parse_mode='MarkdownV2')
     except Exception as e:
@@ -1418,7 +1418,7 @@ async def disable_delete_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     try:
-        disable_delete_commands(g_id)
+        disable_deletion(g_id)
         cf = f"✅ Deletion of unauthorized commands disabled for group `{g_id}`."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(cf, version=2), parse_mode='MarkdownV2')
     except Exception as e:
