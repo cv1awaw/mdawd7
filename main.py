@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 import re
 import asyncio
 import tempfile
+import signal
 
 # -------------------------------------------------------------------------------------
 # OPTIONAL IMPORTS (PDF and OCR)
@@ -92,6 +93,14 @@ def release_lock(lock_file):
 lock_file = acquire_lock()
 import atexit
 atexit.register(release_lock, lock_file)
+
+# Handle graceful shutdowns
+def signal_handler(sig, frame):
+    logger.info("Shutdown signal received. Exiting gracefully...")
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 # ------------------- DB Initialization -------------------
 
@@ -267,7 +276,7 @@ def enable_deletion(group_id):
         conn.close()
         logger.info(f"Enabled Arabic deletion for group {group_id}.")
     except Exception as e:
-        logger.error(f"Error enabling deletion for {group_id}: {e}")
+        logger.error(f"Error enabling deletion for group {group_id}: {e}")
         raise
 
 def disable_deletion(group_id):
@@ -283,7 +292,7 @@ def disable_deletion(group_id):
         conn.close()
         logger.info(f"Disabled Arabic deletion for group {group_id}.")
     except Exception as e:
-        logger.error(f"Error disabling deletion for {group_id}: {e}")
+        logger.error(f"Error disabling deletion for group {group_id}: {e}")
         raise
 
 def is_deletion_enabled(group_id):
@@ -295,7 +304,7 @@ def is_deletion_enabled(group_id):
         conn.close()
         return bool(row and row[0])
     except Exception as e:
-        logger.error(f"Error checking deletion for {group_id}: {e}")
+        logger.error(f"Error checking deletion for group {group_id}: {e}")
         return False
 
 def revoke_user_permissions(user_id):
@@ -307,7 +316,7 @@ def revoke_user_permissions(user_id):
         conn.close()
         logger.info(f"Revoked permissions for user {user_id} (role='removed').")
     except Exception as e:
-        logger.error(f"Error revoking permissions for {user_id}: {e}")
+        logger.error(f"Error revoking permissions for user {user_id}: {e}")
         raise
 
 def remove_user_from_removed_users(group_id, user_id):
@@ -617,7 +626,7 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         err = f"⚠️ Could not ban `{u_id}` from group `{g_id}` (check bot permissions)."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
-        logger.error(f"Ban error for {u_id} in {g_id}: {e}")
+        logger.error(f"Ban error for user {u_id} in group {g_id}: {e}")
         return
 
     delete_all_messages_after_removal[g_id] = datetime.utcnow() + timedelta(seconds=MESSAGE_DELETE_TIMEFRAME)
@@ -663,7 +672,7 @@ async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cf = f"✅ Muted user `{u_id}` in group `{g_id}` for {minutes} minute(s)."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(cf, version=2), parse_mode='MarkdownV2')
     except Exception as e:
-        logger.error(f"Error muting user {u_id} in {g_id}: {e}")
+        logger.error(f"Error muting user {u_id} in group {g_id}: {e}")
         err = "⚠️ Could not mute. Bot must be admin with can_restrict_members."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
 
@@ -1210,7 +1219,7 @@ async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"Created one-time link for group {g_id}: {invite_link_obj.invite_link}")
     except Exception as e:
         logger.error(f"Error creating invite link for group {g_id}: {e}")
-        err = "⚠️ Could not create invite link. Check bot admin rights & logs."
+        err = "⚠️ Could not create invite link. Check bot permissions & logs."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
 
 # ------------------- main() -------------------
