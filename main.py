@@ -44,9 +44,9 @@ from telegram.helpers import escape_markdown
 # ------------------- Configuration -------------------
 
 DATABASE = 'warnings.db'
-ALLOWED_USER_ID = 6177929931  # Replace with your own Telegram user ID
+ALLOWED_USER_ID = 6177929931  # استبدل هذا بمعرف المستخدم الخاص بك على Telegram
 LOCK_FILE = '/tmp/telegram_bot.lock'
-MESSAGE_DELETE_TIMEFRAME = 15  # Seconds
+MESSAGE_DELETE_TIMEFRAME = 15  # ثوانٍ
 
 # ------------------- Logging Setup -------------------
 
@@ -1193,37 +1193,6 @@ async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         err = "⚠️ Could not create invite link. Check bot admin rights & logs."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
 
-# ------------------- Unauthorized Command Deletion Handler -------------------
-
-async def delete_unauthorized_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.message
-    if not msg:
-        return
-
-    user = msg.from_user
-    chat = msg.chat
-
-    # Only process if the message is in a group or supergroup
-    if chat.type not in ["group", "supergroup"]:
-        return  # Ignore commands sent in private chats
-
-    # Delete the command message
-    try:
-        await msg.delete()
-        logger.info(f"Deleted unauthorized command from user {user.id} in group {chat.id}.")
-        
-        # Optional: Inform the user that their command was deleted
-        await context.bot.send_message(
-            chat_id=user.id,
-            text="⚠️ Your command was deleted because you're not authorized to use bot commands in groups."
-        )
-    except Exception as e:
-        logger.error(f"Failed to delete unauthorized command: {e}")
-
-# ------------------- /be_sad & /be_happy & /check & /link Commands -------------------
-
-# (These command handlers are already defined above.)
-
 # ------------------- main() -------------------
 
 def main():
@@ -1287,7 +1256,7 @@ def main():
 
     # Handler to delete any command messages in groups
     app.add_handler(MessageHandler(
-        filters.COMMAND & (filters.GROUP | filters.SUPERGROUP),
+        filters.COMMAND & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
         delete_unauthorized_commands
     ))
 
