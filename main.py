@@ -46,7 +46,7 @@ from telegram.helpers import escape_markdown
 DATABASE = 'warnings.db'
 ALLOWED_USER_ID = 6177929931  # Replace with your own Telegram user ID
 LOCK_FILE = '/tmp/telegram_bot.lock'
-MESSAGE_DELETE_TIMEFRAME = 15
+MESSAGE_DELETE_TIMEFRAME = 15  # Seconds for temporary message deletion after removal
 
 # ------------------- Logging Setup -------------------
 
@@ -197,7 +197,7 @@ def set_group_name(group_id, name):
         conn.close()
         logger.info(f"Group {group_id} name set to '{name}'.")
     except Exception as e:
-        logger.error(f"Error setting name for group {group_id}: {e}")
+        logger.error(f"Error setting group name for {group_id}: {e}")
         raise
 
 def group_exists(group_id):
@@ -307,7 +307,7 @@ def revoke_user_permissions(user_id):
         conn.close()
         logger.info(f"Revoked permissions for user {user_id} (role='removed').")
     except Exception as e:
-        logger.error(f"Error revoking perms for {user_id}: {e}")
+        logger.error(f"Error revoking permissions for {user_id}: {e}")
         raise
 
 def remove_user_from_removed_users(group_id, user_id):
@@ -579,7 +579,7 @@ async def love_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         revoke_user_permissions(u_id)
     except Exception as e:
-        logger.error(f"Error revoking perms for {u_id}: {e}")
+        logger.error(f"Error revoking permissions for {u_id}: {e}")
 
     cf = f"✅ Loved user `{u_id}` (removed from 'Removed Users') in group `{g_id}`."
     await context.bot.send_message(chat_id=user.id, text=escape_markdown(cf, version=2), parse_mode='MarkdownV2')
@@ -610,12 +610,12 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         revoke_user_permissions(u_id)
     except Exception as e:
-        logger.error(f"Revoke perms failed for {u_id}: {e}")
+        logger.error(f"Revoke permissions failed for {u_id}: {e}")
 
     try:
         await context.bot.ban_chat_member(chat_id=g_id, user_id=u_id)
     except Exception as e:
-        err = f"⚠️ Could not ban `{u_id}` from group `{g_id}` (check bot perms)."
+        err = f"⚠️ Could not ban `{u_id}` from group `{g_id}` (check bot permissions)."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
         logger.error(f"Ban error for {u_id} in {g_id}: {e}")
         return
@@ -623,7 +623,7 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     delete_all_messages_after_removal[g_id] = datetime.utcnow() + timedelta(seconds=MESSAGE_DELETE_TIMEFRAME)
     asyncio.create_task(remove_deletion_flag_after_timeout(g_id))
 
-    cf = f"✅ Removed `{u_id}` from group `{g_id}`.\nMessages for next {MESSAGE_DELETE_TIMEFRAME}s will be deleted."
+    cf = f"✅ Removed `{u_id}` from group `{g_id}`.\nMessages for next {MESSAGE_DELETE_TIMEFRAME} seconds will be deleted."
     await context.bot.send_message(chat_id=user.id, text=escape_markdown(cf, version=2), parse_mode='MarkdownV2')
 
 # MUTE:
@@ -694,7 +694,7 @@ async def unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(ef, version=2), parse_mode='MarkdownV2')
         return
 
-    # restore normal perms
+    # Restore normal permissions
     perms = ChatPermissions(
         can_send_messages=True,
         can_send_media_messages=True,
@@ -732,13 +732,13 @@ VALID_PERMISSION_TYPES = [
 async def limit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /limit <group_id> <user_id> <permission_type> <on/off>
-    toggles a specific permission for normal members
+    toggles a specific permission for a user
     """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
 
-    # parse arguments
+    # Parse arguments
     if len(context.args) != 4:
         msg = (
             "⚠️ Usage: `/limit <group_id> <user_id> <permission_type> <on/off>`\n"
@@ -754,27 +754,27 @@ async def limit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         p_type = context.args[2].lower().strip()
         toggle = context.args[3].lower().strip()
     except:
-        wr = "⚠️ group_id & user_id must be int, then permission_type, then on/off."
+        wr = "⚠️ group_id & user_id must be integers, followed by permission_type and on/off."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(wr, version=2), parse_mode='MarkdownV2')
         return
 
-    # check if group is registered
+    # Check if group is registered
     if not group_exists(g_id):
         w = f"⚠️ Group `{g_id}` not registered."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(w, version=2), parse_mode='MarkdownV2')
         return
 
-    # optional: check if group is supergroup
+    # Optional: Check if group is supergroup
     try:
         chat_info = await context.bot.get_chat(g_id)
         if chat_info.type != "supergroup":
             note = f"⚠️ This group is type '{chat_info.type}'. Telegram restrictions typically require a supergroup."
             await context.bot.send_message(chat_id=user.id, text=escape_markdown(note, version=2), parse_mode='MarkdownV2')
     except Exception as e:
-        logger.error(f"Error get_chat for group {g_id}: {e}")
+        logger.error(f"Error getting chat info for group {g_id}: {e}")
         pass
 
-    # check the user status
+    # Check the user status
     try:
         target_member = await context.bot.get_chat_member(chat_id=g_id, user_id=u_id)
         # If user is admin or creator, we can't restrict them
@@ -786,32 +786,34 @@ async def limit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=user.id, text=escape_markdown(wr, version=2), parse_mode='MarkdownV2')
             return
     except Exception as e:
-        logger.error(f"Error get_chat_member for {u_id} in group {g_id}: {e}")
-        wr = "⚠️ Could not fetch user status. Possibly user left or never was in the group?"
+        logger.error(f"Error getting chat member for {u_id} in group {g_id}: {e}")
+        wr = "⚠️ Could not fetch user status. Possibly user left or was never in the group?"
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(wr, version=2), parse_mode='MarkdownV2')
         return
 
     # Build permissions
-    def off():
+    def toggle_off():
         return toggle == "off"
 
+    # Initialize permissions to current settings
     can_send_messages = True
     can_send_media_messages = True
     can_send_polls = True
     can_send_other_messages = True
     can_add_web_page_previews = True
 
+    # Modify permissions based on command
     if p_type in ["photos", "videos", "files", "music", "gifs", "voice", "video_messages", "inlinebots", "embed_links"]:
-        if off():
+        if toggle_off():
             can_send_media_messages = False
     elif p_type in ["stickers", "games"]:
-        if off():
+        if toggle_off():
             can_send_other_messages = False
     elif p_type == "polls":
-        if off():
+        if toggle_off():
             can_send_polls = False
     elif p_type == "text":
-        if off():
+        if toggle_off():
             can_send_messages = False
     else:
         wr = (
@@ -826,7 +828,7 @@ async def limit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         can_send_media_messages=can_send_media_messages,
         can_send_polls=can_send_polls,
         can_send_other_messages=can_send_other_messages,
-        can_add_web_page_previews=True
+        can_add_web_page_previews=can_add_web_page_previews
     )
 
     # Attempt to apply
@@ -841,7 +843,7 @@ async def limit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(msg, version=2), parse_mode='MarkdownV2')
     except Exception as e:
-        logger.error(f"Error limiting perms for {u_id} in {g_id}: {e}")
+        logger.error(f"Error limiting permissions for {u_id} in group {g_id}: {e}")
         err = (
             "⚠️ Could not limit permission. Ensure the bot is admin with can_restrict_members.\n"
             "Check logs for details."
@@ -862,7 +864,7 @@ async def slow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         g_id = int(context.args[0])
         delay = int(context.args[1])
     except:
-        w = "⚠️ group_id & delay must be int."
+        w = "⚠️ group_id & delay must be integers."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(w, version=2), parse_mode='MarkdownV2')
         return
 
@@ -915,12 +917,12 @@ async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_T
     if is_bypass_user(user.id):
         return
 
-    # check text or caption
+    # Check text or caption
     text_or_caption = (msg.text or msg.caption or "")
     if text_or_caption and has_arabic(text_or_caption):
         try:
             await msg.delete()
-            logger.info(f"Deleted Arabic text from {user.id} in group {chat_id}.")
+            logger.info(f"Deleted Arabic text from user {user.id} in group {chat_id}.")
         except Exception as e:
             logger.error(f"Error deleting Arabic message: {e}")
         return
@@ -929,51 +931,57 @@ async def delete_arabic_messages(update: Update, context: ContextTypes.DEFAULT_T
     if msg.document and msg.document.file_name and msg.document.file_name.lower().endswith('.pdf'):
         if pdf_available:
             file_id = msg.document.file_id
-            file_ref = await context.bot.get_file(file_id)
-            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
-                await file_ref.download_to_drive(tmp_pdf.name)
-                tmp_pdf.flush()
-                try:
-                    with open(tmp_pdf.name, 'rb') as pdf_file:
-                        try:
-                            reader = PyPDF2.PdfReader(pdf_file)
-                            all_text = ""
-                            for page in reader.pages:
-                                all_text += page.extract_text() or ""
-                            if has_arabic(all_text):
-                                await msg.delete()
-                                logger.info(f"Deleted PDF with Arabic from user {user.id} in {chat_id}.")
-                        except Exception as e:
-                            logger.error(f"PyPDF2 read error: {e}")
-                except Exception as e:
-                    logger.error(f"PDF parse error: {e}")
-                finally:
+            try:
+                file_ref = await context.bot.get_file(file_id)
+                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
+                    await file_ref.download_to_drive(tmp_pdf.name)
+                    tmp_pdf.flush()
                     try:
-                        os.remove(tmp_pdf.name)
-                    except:
-                        pass
+                        with open(tmp_pdf.name, 'rb') as pdf_file:
+                            try:
+                                reader = PyPDF2.PdfReader(pdf_file)
+                                all_text = ""
+                                for page in reader.pages:
+                                    all_text += page.extract_text() or ""
+                                if has_arabic(all_text):
+                                    await msg.delete()
+                                    logger.info(f"Deleted PDF with Arabic from user {user.id} in group {chat_id}.")
+                            except Exception as e:
+                                logger.error(f"PyPDF2 read error: {e}")
+                    except Exception as e:
+                        logger.error(f"PDF parse error: {e}")
+                    finally:
+                        try:
+                            os.remove(tmp_pdf.name)
+                        except:
+                            pass
+            except Exception as e:
+                logger.error(f"Error processing PDF file: {e}")
 
     # If photo, do OCR check
     if msg.photo:
         if pytesseract_available and pillow_available:
-            photo_obj = msg.photo[-1]  # highest resolution
+            photo_obj = msg.photo[-1]  # Highest resolution
             file_id = photo_obj.file_id
-            file_ref = await context.bot.get_file(file_id)
-            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_img:
-                await file_ref.download_to_drive(tmp_img.name)
-                tmp_img.flush()
-                try:
-                    extracted = pytesseract.image_to_string(Image.open(tmp_img.name)) or ""
-                    if has_arabic(extracted):
-                        await msg.delete()
-                        logger.info(f"Deleted image with Arabic from user {user.id} in {chat_id}.")
-                except Exception as e:
-                    logger.error(f"OCR error: {e}")
-                finally:
+            try:
+                file_ref = await context.bot.get_file(file_id)
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_img:
+                    await file_ref.download_to_drive(tmp_img.name)
+                    tmp_img.flush()
                     try:
-                        os.remove(tmp_img.name)
-                    except:
-                        pass
+                        extracted = pytesseract.image_to_string(Image.open(tmp_img.name)) or ""
+                        if has_arabic(extracted):
+                            await msg.delete()
+                            logger.info(f"Deleted image with Arabic from user {user.id} in group {chat_id}.")
+                    except Exception as e:
+                        logger.error(f"OCR error: {e}")
+                    finally:
+                        try:
+                            os.remove(tmp_img.name)
+                        except:
+                            pass
+            except Exception as e:
+                logger.error(f"Error processing image file: {e}")
 
 async def delete_any_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -985,13 +993,13 @@ async def delete_any_messages(update: Update, context: ContextTypes.DEFAULT_TYPE
         expiry = delete_all_messages_after_removal[chat_id]
         if datetime.utcnow() > expiry:
             delete_all_messages_after_removal.pop(chat_id, None)
-            logger.info(f"Short-term deletion expired for {chat_id}.")
+            logger.info(f"Short-term deletion expired for group {chat_id}.")
             return
         try:
             await msg.delete()
             logger.info(f"Deleted a message in group {chat_id} (short-term).")
         except Exception as e:
-            logger.error(f"Failed to delete flagged message in {chat_id}: {e}")
+            logger.error(f"Failed to delete flagged message in group {chat_id}: {e}")
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error("Error in the bot:", exc_info=context.error)
@@ -1012,18 +1020,21 @@ async def unauthorized_command_handler(update: Update, context: ContextTypes.DEF
     user = msg.from_user
     chat_id = msg.chat.id
 
-    # تحقق مما إذا كان المستخدم هو المسموح له
+    # Check if the user is allowed
     if user.id == ALLOWED_USER_ID:
-        return  # لا تفعل شيئًا إذا كان المستخدم المسموح
+        return  # Do nothing if the user is allowed
 
-    # حذف الرسالة
+    # Log the unauthorized attempt
+    logger.info(f"Received unauthorized command from user {user.id} in chat {chat_id}: {msg.text}")
+
+    # Delete the message
     try:
         await msg.delete()
-        logger.info(f"تم حذف رسالة غير مصرح بها من المستخدم {user.id} في المجموعة {chat_id}.")
+        logger.info(f"Deleted unauthorized message from user {user.id} in group {chat_id}.")
     except Exception as e:
-        logger.error(f"فشل في حذف الرسالة: {e}")
+        logger.error(f"Failed to delete message: {e}")
 
-    # ميوت المستخدم لمدة ساعة
+    # Mute the user for one hour
     until_date = datetime.utcnow() + timedelta(hours=1)
     perms = ChatPermissions(can_send_messages=False)
 
@@ -1034,9 +1045,9 @@ async def unauthorized_command_handler(update: Update, context: ContextTypes.DEF
             permissions=perms,
             until_date=until_date
         )
-        logger.info(f"تم ميوت المستخدم {user.id} في المجموعة {chat_id} لمدة ساعة بسبب استخدام أمر غير مصرح.")
+        logger.info(f"Muted user {user.id} in group {chat_id} for one hour due to unauthorized command.")
     except Exception as e:
-        logger.error(f"فشل في ميوت المستخدم {user.id} في المجموعة {chat_id}: {e}")
+        logger.error(f"Failed to mute user {user.id} in group {chat_id}: {e}")
 
 # ------------------- /be_sad & /be_happy & /check & /link Commands -------------------
 
@@ -1062,8 +1073,8 @@ async def be_sad_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cf = f"✅ Arabic deletion enabled for group `{g_id}`."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(cf, version=2), parse_mode='MarkdownV2')
     except Exception as e:
-        logger.error(f"Error enabling deletion for {g_id}: {e}")
-        er = "⚠️ Could not enable. Check logs."
+        logger.error(f"Error enabling deletion for group {g_id}: {e}")
+        er = "⚠️ Could not enable deletion. Check logs."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(er, version=2), parse_mode='MarkdownV2')
 
 async def be_happy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1088,8 +1099,8 @@ async def be_happy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cf = f"✅ Arabic deletion disabled for group `{g_id}`."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(cf, version=2), parse_mode='MarkdownV2')
     except Exception as e:
-        logger.error(f"Error disabling deletion for {g_id}: {e}")
-        err = "⚠️ Could not disable. Check logs."
+        logger.error(f"Error disabling deletion for group {g_id}: {e}")
+        err = "⚠️ Could not disable deletion. Check logs."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
 
 async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1121,8 +1132,8 @@ async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         removed_list = [row[0] for row in c.fetchall()]
         conn.close()
     except Exception as e:
-        logger.error(f"Error listing removed users for {g_id}: {e}")
-        e2 = "⚠️ DB error. Check logs."
+        logger.error(f"Error listing removed users for group {g_id}: {e}")
+        e2 = "⚠️ Database error. Check logs."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(e2, version=2), parse_mode='MarkdownV2')
         return
 
@@ -1141,7 +1152,7 @@ async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 not_in.append(uid)
         except Exception as e:
-            logger.error(f"Error get_chat_member for {uid} in {g_id}: {e}")
+            logger.error(f"Error getting chat member for user {uid} in group {g_id}: {e}")
             not_in.append(uid)
 
     resp = f"*Check Results for Group `{g_id}`:*\n\n"
@@ -1164,7 +1175,7 @@ async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.ban_chat_member(chat_id=g_id, user_id=x)
             logger.info(f"Auto-banned user {x} in group {g_id} after /check.")
         except Exception as e:
-            logger.error(f"Failed to ban {x} in group {g_id}: {e}")
+            logger.error(f"Failed to ban user {x} in group {g_id}: {e}")
 
 async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1196,9 +1207,9 @@ async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         cf = f"✅ One-time invite link for group `{g_id}`:\n\n{invite_link_obj.invite_link}"
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(cf, version=2), parse_mode='MarkdownV2')
-        logger.info(f"Created one-time link for {g_id}: {invite_link_obj.invite_link}")
+        logger.info(f"Created one-time link for group {g_id}: {invite_link_obj.invite_link}")
     except Exception as e:
-        logger.error(f"Error creating link for {g_id}: {e}")
+        logger.error(f"Error creating invite link for group {g_id}: {e}")
         err = "⚠️ Could not create invite link. Check bot admin rights & logs."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
 
@@ -1208,8 +1219,8 @@ def main():
     try:
         init_db()
     except Exception as e:
-        logger.critical(f"DB init failure: {e}")
-        sys.exit("Cannot start due to DB init failure.")
+        logger.critical(f"DB initialization failure: {e}")
+        sys.exit("Cannot start due to DB initialization failure.")
 
     TOKEN = os.getenv('BOT_TOKEN')
     if not TOKEN:
@@ -1222,7 +1233,7 @@ def main():
     try:
         app = ApplicationBuilder().token(TOKEN).build()
     except Exception as e:
-        logger.critical(f"Failed building Telegram app: {e}")
+        logger.critical(f"Failed to build Telegram app: {e}")
         sys.exit("Bot build error.")
 
     # Register commands
@@ -1245,7 +1256,7 @@ def main():
     app.add_handler(CommandHandler("permission_type", permission_type_cmd))
 
     # ------------------- Unauthorized Command Handler -------------------
-    # تسجيل معالج الأوامر غير المصرح بها
+    # Register unauthorized command handler BEFORE other message handlers
     app.add_handler(MessageHandler(filters.COMMAND & ~filters.User(ALLOWED_USER_ID), unauthorized_command_handler))
 
     # Message handlers
@@ -1262,6 +1273,7 @@ def main():
         handle_group_name_reply
     ))
 
+    # Error handler
     app.add_error_handler(error_handler)
 
     logger.info("Bot starting with improved /limit checks, /unmute command, and unauthorized command handling.")
