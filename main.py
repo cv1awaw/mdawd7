@@ -11,9 +11,7 @@ import asyncio
 import tempfile
 import signal
 
-# -------------------------------------------------------------------------------------
-# OPTIONAL IMPORTS (PDF and OCR)
-# -------------------------------------------------------------------------------------
+# Optional Imports (PDF and OCR)
 pdf_available = True
 try:
     import PyPDF2
@@ -47,7 +45,7 @@ from telegram.helpers import escape_markdown
 DATABASE = 'warnings.db'
 ALLOWED_USER_ID = 6177929931  # Replace with your own Telegram user ID
 LOCK_FILE = '/tmp/telegram_bot.lock'
-MESSAGE_DELETE_TIMEFRAME = 15  # Seconds for temporary message deletion after removal
+MUTE_DURATION = 60  # Mute duration in minutes
 
 # ------------------- Logging Setup -------------------
 
@@ -684,10 +682,10 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ban error for user {u_id} in group {g_id}: {e}")
         return
 
-    delete_all_messages_after_removal[g_id] = datetime.utcnow() + timedelta(seconds=MESSAGE_DELETE_TIMEFRAME)
+    delete_all_messages_after_removal[g_id] = datetime.utcnow() + timedelta(seconds=15)
     asyncio.create_task(remove_deletion_flag_after_timeout(g_id))
 
-    cf = f"✅ Removed `{u_id}` from group `{g_id}`.\nMessages for next {MESSAGE_DELETE_TIMEFRAME} seconds will be deleted."
+    cf = f"✅ Removed `{u_id}` from group `{g_id}`.\nMessages for next 15 seconds will be deleted."
     await context.bot.send_message(chat_id=user.id, text=escape_markdown(cf, version=2), parse_mode='MarkdownV2')
 
 # MUTE:
@@ -1084,8 +1082,12 @@ async def unauthorized_command_handler(update: Update, context: ContextTypes.DEF
     user = msg.from_user
     chat_id = msg.chat.id
 
-    # Check if the user is allowed
-    if user.id == ALLOWED_USER_ID:
+    # Check if the chat is a group or supergroup
+    if msg.chat.type not in ["group", "supergroup"]:
+        return  # Ignore private chats
+
+    # Check if the user is allowed (owner or bypassed)
+    if user.id == ALLOWED_USER_ID or is_bypass_user(user.id):
         return  # Do nothing if the user is allowed
 
     # Log the unauthorized attempt
@@ -1107,7 +1109,7 @@ async def unauthorized_command_handler(update: Update, context: ContextTypes.DEF
 
     # Mute the user if enabled
     if mute_enabled:
-        until_date = datetime.utcnow() + timedelta(hours=1)
+        until_date = datetime.utcnow() + timedelta(minutes=MUTE_DURATION)
         perms = ChatPermissions(can_send_messages=False)
 
         try:
@@ -1117,7 +1119,7 @@ async def unauthorized_command_handler(update: Update, context: ContextTypes.DEF
                 permissions=perms,
                 until_date=until_date
             )
-            logger.info(f"Muted user {user.id} in group {chat_id} for one hour due to unauthorized command.")
+            logger.info(f"Muted user {user.id} in group {chat_id} for {MUTE_DURATION} minutes due to unauthorized command.")
         except Exception as e:
             logger.error(f"Failed to mute user {user.id} in group {chat_id}: {e}")
 
