@@ -1193,9 +1193,36 @@ async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         err = "⚠️ Could not create invite link. Check bot admin rights & logs."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
 
-# ------------------- Message Handlers Registration -------------------
+# ------------------- Unauthorized Command Deletion Handler -------------------
 
-# The handlers are registered within the main() function
+async def delete_unauthorized_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    if not msg:
+        return
+
+    user = msg.from_user
+    chat = msg.chat
+
+    # Only process if the message is in a group or supergroup
+    if chat.type not in ["group", "supergroup"]:
+        return  # Ignore commands sent in private chats
+
+    # Delete the command message
+    try:
+        await msg.delete()
+        logger.info(f"Deleted unauthorized command from user {user.id} in group {chat.id}.")
+        
+        # Optional: Inform the user that their command was deleted
+        await context.bot.send_message(
+            chat_id=user.id,
+            text="⚠️ Your command was deleted because you're not authorized to use bot commands in groups."
+        )
+    except Exception as e:
+        logger.error(f"Failed to delete unauthorized command: {e}")
+
+# ------------------- /be_sad & /be_happy & /check & /link Commands -------------------
+
+# (These command handlers are already defined above.)
 
 # ------------------- main() -------------------
 
@@ -1221,23 +1248,23 @@ def main():
         sys.exit("Bot build error.")
 
     # Register commands with PRIVATE filter
-    app.add_handler(CommandHandler("start", start_cmd, filters=filters.PRIVATE))
-    app.add_handler(CommandHandler("help", help_cmd, filters=filters.PRIVATE))
-    app.add_handler(CommandHandler("group_add", group_add_cmd, filters=filters.PRIVATE))
-    app.add_handler(CommandHandler("rmove_group", rmove_group_cmd, filters=filters.PRIVATE))
-    app.add_handler(CommandHandler("bypass", bypass_cmd, filters=filters.PRIVATE))
-    app.add_handler(CommandHandler("unbypass", unbypass_cmd, filters=filters.PRIVATE))
-    app.add_handler(CommandHandler("love", love_cmd, filters=filters.PRIVATE))
-    app.add_handler(CommandHandler("rmove_user", rmove_user_cmd, filters=filters.PRIVATE))
-    app.add_handler(CommandHandler("mute", mute_cmd, filters=filters.PRIVATE))
-    app.add_handler(CommandHandler("unmute", unmute_cmd, filters=filters.PRIVATE))  # New
-    app.add_handler(CommandHandler("limit", limit_cmd, filters=filters.PRIVATE))
-    app.add_handler(CommandHandler("slow", slow_cmd, filters=filters.PRIVATE))
-    app.add_handler(CommandHandler("be_sad", be_sad_cmd, filters=filters.PRIVATE))
-    app.add_handler(CommandHandler("be_happy", be_happy_cmd, filters=filters.PRIVATE))
-    app.add_handler(CommandHandler("check", check_cmd, filters=filters.PRIVATE))
-    app.add_handler(CommandHandler("link", link_cmd, filters=filters.PRIVATE))
-    app.add_handler(CommandHandler("permission_type", permission_type_cmd, filters=filters.PRIVATE))
+    app.add_handler(CommandHandler("start", start_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("help", help_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("group_add", group_add_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("rmove_group", rmove_group_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("bypass", bypass_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("unbypass", unbypass_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("love", love_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("rmove_user", rmove_user_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("mute", mute_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("unmute", unmute_cmd, filters=filters.ChatType.PRIVATE))  # New
+    app.add_handler(CommandHandler("limit", limit_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("slow", slow_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("be_sad", be_sad_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("be_happy", be_happy_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("check", check_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("link", link_cmd, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("permission_type", permission_type_cmd, filters=filters.ChatType.PRIVATE))
 
     # Message handlers
     # Handler to delete any message containing Arabic content
