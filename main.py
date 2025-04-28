@@ -566,8 +566,7 @@ async def bypass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = "⚠️ Usage: /bypass <user_id>"
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(msg, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(msg, version=2), parse_mode='MarkdownV2'
         )
     try:
         uid = int(context.args[0])
@@ -575,31 +574,27 @@ async def bypass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         wr = "⚠️ user_id must be integer."
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(wr, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(wr, version=2), parse_mode='MarkdownV2'
         )
     if is_bypass_user(uid):
         wr = f"⚠️ User {uid} is already bypassed."
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(wr, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(wr, version=2), parse_mode='MarkdownV2'
         )
     try:
         add_bypass_user(uid)
         cf = f"✅ User {uid} added to bypass list."
         await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(cf, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(cf, version=2), parse_mode='MarkdownV2'
         )
     except Exception as e:
         logger.error(f"Error bypassing {uid}: {e}")
         err = "⚠️ Could not bypass user. Check logs."
         await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(err, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(err, version=2), parse_mode='MarkdownV2'
         )
 
 async def unbypass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -610,8 +605,7 @@ async def unbypass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = "⚠️ Usage: /unbypass <user_id>"
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(msg, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(msg, version=2), parse_mode='MarkdownV2'
         )
     try:
         uid = int(context.args[0])
@@ -619,23 +613,20 @@ async def unbypass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         wr = "⚠️ user_id must be integer."
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(wr, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(wr, version=2), parse_mode='MarkdownV2'
         )
     removed = remove_bypass_user(uid)
     if removed:
         cf = f"✅ User {uid} removed from bypass list."
         await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(cf, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(cf, version=2), parse_mode='MarkdownV2'
         )
     else:
         wr = f"⚠️ User {uid} not found in bypass list."
         await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(wr, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(wr, version=2), parse_mode='MarkdownV2'
         )
 
 async def love_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -647,8 +638,7 @@ async def love_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = "⚠️ Usage: /love <group_id> <user_id>"
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(msg, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(msg, version=2), parse_mode='MarkdownV2'
         )
     try:
         g_id = int(context.args[0])
@@ -657,23 +647,20 @@ async def love_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         e = "⚠️ Both group_id and user_id must be integers."
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(e, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(e, version=2), parse_mode='MarkdownV2'
         )
     if not group_exists(g_id):
         wr = f"⚠️ Group {g_id} is not registered."
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(wr, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(wr, version=2), parse_mode='MarkdownV2'
         )
     removed = remove_user_from_removed_users(g_id, u_id)
     if not removed:
         wr = f"⚠️ User {u_id} is not in 'Removed Users' for group {g_id}."
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(wr, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(wr, version=2), parse_mode='MarkdownV2'
         )
     try:
         revoke_user_permissions(u_id)
@@ -682,8 +669,7 @@ async def love_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cf = f"✅ Loved user {u_id} (removed from 'Removed Users') in group {g_id}."
     await context.bot.send_message(
         chat_id=user.id,
-        text=escape_markdown(cf, version=2),
-        parse_mode='MarkdownV2'
+        text=escape_markdown(cf, version=2), parse_mode='MarkdownV2'
     )
 
 async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -695,8 +681,7 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = "⚠️ Usage: /rmove_user <group_id> <user_id>"
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(msg, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(msg, version=2), parse_mode='MarkdownV2'
         )
     try:
         g_id = int(context.args[0])
@@ -705,8 +690,7 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         e = "⚠️ Both group_id and user_id must be integers."
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(e, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(e, version=2), parse_mode='MarkdownV2'
         )
     remove_bypass_user(u_id)
     remove_user_from_removed_users(g_id, u_id)
@@ -720,8 +704,7 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         err = f"⚠️ Could not ban {u_id} from group {g_id} (check bot perms)."
         await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(err, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(err, version=2), parse_mode='MarkdownV2'
         )
         logger.error(f"Ban error for {u_id} in {g_id}: {e}")
         return
@@ -733,8 +716,7 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await context.bot.send_message(
         chat_id=user.id,
-        text=escape_markdown(cf, version=2),
-        parse_mode='MarkdownV2'
+        text=escape_markdown(cf, version=2), parse_mode='MarkdownV2'
     )
 
 async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -746,8 +728,7 @@ async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = "⚠️ Usage: /mute <group_id> <user_id> <minutes>"
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(msg, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(msg, version=2), parse_mode='MarkdownV2'
         )
     try:
         g_id = int(context.args[0])
@@ -757,15 +738,13 @@ async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         w = "⚠️ group_id, user_id, & minutes must be integers."
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(w, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(w, version=2), parse_mode='MarkdownV2'
         )
     if not group_exists(g_id):
         ef = f"⚠️ Group {g_id} not registered."
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(ef, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(ef, version=2), parse_mode='MarkdownV2'
         )
     until_date = datetime.utcnow() + timedelta(minutes=minutes)
     perms = ChatPermissions(can_send_messages=False)
@@ -779,16 +758,14 @@ async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cf = f"✅ Muted user {u_id} in group {g_id} for {minutes} minute(s)."
         await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(cf, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(cf, version=2), parse_mode='MarkdownV2'
         )
     except Exception as e:
         logger.error(f"Error muting user {u_id} in {g_id}: {e}")
         err = "⚠️ Could not mute. Bot must be admin with can_restrict_members."
         await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(err, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(err, version=2), parse_mode='MarkdownV2'
         )
 
 async def unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -800,8 +777,7 @@ async def unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = "⚠️ Usage: /unmute <group_id> <user_id>"
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(msg, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(msg, version=2), parse_mode='MarkdownV2'
         )
     try:
         g_id = int(context.args[0])
@@ -810,15 +786,13 @@ async def unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         w = "⚠️ group_id, user_id must be integers."
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(w, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(w, version=2), parse_mode='MarkdownV2'
         )
     if not group_exists(g_id):
         ef = f"⚠️ Group {g_id} is not registered."
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(ef, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(ef, version=2), parse_mode='MarkdownV2'
         )
     perms = ChatPermissions(
         can_send_messages=True,
@@ -836,16 +810,14 @@ async def unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cf = f"✅ Unmuted user {u_id} in group {g_id}."
         await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(cf, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(cf, version=2), parse_mode='MarkdownV2'
         )
     except Exception as e:
         logger.error(f"Error unmuting user {u_id} in group {g_id}: {e}")
         err = "⚠️ Could not unmute. Bot must be admin with can_restrict_members."
         await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(err, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(err, version=2), parse_mode='MarkdownV2'
         )
 
 VALID_PERMISSION_TYPES = [
@@ -866,8 +838,7 @@ async def limit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(msg, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(msg, version=2), parse_mode='MarkdownV2'
         )
     try:
         g_id = int(context.args[0])
@@ -878,15 +849,13 @@ async def limit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         wr = "⚠️ Invalid arguments."
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(wr, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(wr, version=2), parse_mode='MarkdownV2'
         )
     if not group_exists(g_id):
         w = f"⚠️ Group {g_id} not registered."
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(w, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(w, version=2), parse_mode='MarkdownV2'
         )
     perms_kwargs = {
         "can_send_messages": True,
@@ -909,8 +878,7 @@ async def limit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             wr = "⚠️ Unknown permission_type."
             return await context.bot.send_message(
                 chat_id=user.id,
-                text=escape_markdown(wr, version=2),
-                parse_mode='MarkdownV2'
+                text=escape_markdown(wr, version=2), parse_mode='MarkdownV2'
             )
     perms = ChatPermissions(**perms_kwargs)
     try:
@@ -922,16 +890,14 @@ async def limit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = f"✅ Set '{p_type}' to '{toggle}' for {u_id} in {g_id}."
         await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(msg, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(msg, version=2), parse_mode='MarkdownV2'
         )
     except Exception as e:
         logger.error(f"Error limiting perms for {u_id} in {g_id}: {e}")
         err = "⚠️ Could not limit permission."
         await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(err, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(err, version=2), parse_mode='MarkdownV2'
         )
 
 async def slow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -942,8 +908,7 @@ async def slow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = "⚠️ Usage: /slow <group_id> <delay_in_seconds>"
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(msg, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(msg, version=2), parse_mode='MarkdownV2'
         )
     try:
         g_id = int(context.args[0])
@@ -952,21 +917,18 @@ async def slow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         w = "⚠️ group_id & delay must be integers."
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(w, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(w, version=2), parse_mode='MarkdownV2'
         )
     if not group_exists(g_id):
         e = f"⚠️ Group {g_id} not registered."
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(e, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(e, version=2), parse_mode='MarkdownV2'
         )
     note = "⚠️ No official method to set slow mode. (Placeholder only.)"
     await context.bot.send_message(
         chat_id=user.id,
-        text=escape_markdown(note, version=2),
-        parse_mode='MarkdownV2'
+        text=escape_markdown(note, version=2), parse_mode='MarkdownV2'
     )
 
 async def permission_type_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -977,8 +939,7 @@ async def permission_type_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
     message = "Possible permission_type values:\n\n" + types_list
     await context.bot.send_message(
         chat_id=user.id,
-        text=escape_markdown(message, version=2),
-        parse_mode='MarkdownV2'
+        text=escape_markdown(message, version=2), parse_mode='MarkdownV2'
     )
 
 # ------------------- Deletion / Filtering Handlers -------------------
@@ -1082,8 +1043,7 @@ async def be_sad_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = "⚠️ Usage: /be_sad <group_id>"
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(msg, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(msg, version=2), parse_mode='MarkdownV2'
         )
     try:
         g_id = int(context.args[0])
@@ -1091,24 +1051,21 @@ async def be_sad_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         w = "⚠️ group_id must be integer."
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(w, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(w, version=2), parse_mode='MarkdownV2'
         )
     try:
         enable_deletion(g_id)
         cf = f"✅ Arabic deletion enabled for group {g_id}."
         await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(cf, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(cf, version=2), parse_mode='MarkdownV2'
         )
     except Exception as e:
         logger.error(f"Error enabling deletion for {g_id}: {e}")
         er = "⚠️ Could not enable. Check logs."
         await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(er, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(er, version=2), parse_mode='MarkdownV2'
         )
 
 async def be_happy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1119,8 +1076,7 @@ async def be_happy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = "⚠️ Usage: /be_happy <group_id>"
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(msg, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(msg, version=2), parse_mode='MarkdownV2'
         )
     try:
         g_id = int(context.args[0])
@@ -1128,21 +1084,22 @@ async def be_happy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         w = "⚠️ group_id must be integer."
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(w, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(w, version=2), parse_mode='MarkdownV2'
         )
     try:
         disable_deletion(g_id)
         cf = f"✅ Arabic deletion disabled for group {g_id}."
         await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(cf, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(cf, version=2), parse_mode='MarkdownV2'
         )
     except Exception as e:
         logger.error(f"Error disabling deletion for {g_id}: {e}")
         err = "⚠️ Could not disable. Check logs."
-        await context.bot.send_message( chat_id=user.id, text=escape_markdown(err,version=2), parse_mode='MarkdownV2')
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=escape_markdown(err, version=2), parse_mode='MarkdownV2'
+        )
 
 async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1152,8 +1109,7 @@ async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = "⚠️ Usage: /check <group_id>"
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(msg, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(msg, version=2), parse_mode='MarkdownV2'
         )
     try:
         g_id = int(context.args[0])
@@ -1161,15 +1117,13 @@ async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         wr = "⚠️ group_id must be integer."
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(wr, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(wr, version=2), parse_mode='MarkdownV2'
         )
     if not group_exists(g_id):
         ef = f"⚠️ Group {g_id} is not registered."
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(ef, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(ef, version=2), parse_mode='MarkdownV2'
         )
     try:
         conn = sqlite3.connect(DATABASE)
@@ -1182,15 +1136,13 @@ async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         e2 = "⚠️ DB error. Check logs."
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(e2, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(e2, version=2), parse_mode='MarkdownV2'
         )
     if not removed_list:
         msg = f"⚠️ No removed users found for group {g_id}."
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(msg, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(msg, version=2), parse_mode='MarkdownV2'
         )
     still_in = []
     not_in = []
@@ -1216,8 +1168,7 @@ async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         resp += f"• {x}\n"
     await context.bot.send_message(
         chat_id=user.id,
-        text=escape_markdown(resp, version=2),
-        parse_mode='MarkdownV2'
+        text=escape_markdown(resp, version=2), parse_mode='MarkdownV2'
     )
     for x in still_in:
         try:
@@ -1234,8 +1185,7 @@ async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = "⚠️ Usage: /link <group_id>"
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(msg, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(msg, version=2), parse_mode='MarkdownV2'
         )
     try:
         g_id = int(context.args[0])
@@ -1243,15 +1193,13 @@ async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         w = "⚠️ group_id must be integer."
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(w, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(w, version=2), parse_mode='MarkdownV2'
         )
     if not group_exists(g_id):
         e = f"⚠️ Group {g_id} is not registered."
         return await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(e, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(e, version=2), parse_mode='MarkdownV2'
         )
     try:
         invite_link_obj = await context.bot.create_chat_invite_link(
@@ -1262,8 +1210,7 @@ async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cf = f"✅ One-time invite link for group {g_id}:\n\n{invite_link_obj.invite_link}"
         await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(cf, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(cf, version=2), parse_mode='MarkdownV2'
         )
         logger.info(f"Created one-time link for {g_id}: {invite_link_obj.invite_link}")
     except Exception as e:
@@ -1271,8 +1218,7 @@ async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         err = "⚠️ Could not create invite link. Check bot admin rights & logs."
         await context.bot.send_message(
             chat_id=user.id,
-            text=escape_markdown(err, version=2),
-            parse_mode='MarkdownV2'
+            text=escape_markdown(err, version=2), parse_mode='MarkdownV2'
         )
 
 def main():
