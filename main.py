@@ -7,12 +7,15 @@ import logging
 import fcntl
 from datetime import datetime, timedelta
 import re
-import asyncio 
+import asyncio
 import tempfile
 
-# -------------------------------------------------------------------------------------
-# OPTIONAL IMPORTS (PDF and OCR)
-# -------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------
+
+OPTIONAL IMPORTS (PDF and OCR)
+
+-------------------------------------------------------------------------------------
+
 pdf_available = True
 try:
     import PyPDF2
@@ -41,20 +44,20 @@ from telegram.ext import (
 )
 from telegram.helpers import escape_markdown
 
-# ------------------- Configuration -------------------
+------------------- Configuration -------------------
 
 DATABASE = 'warnings.db'
 ALLOWED_USER_ID = 6177929931  # Replace with your own Telegram user ID
 LOCK_FILE = '/tmp/telegram_bot.lock'
 MESSAGE_DELETE_TIMEFRAME = 15
 
-# ------------------- Logging Setup -------------------
+------------------- Logging Setup -------------------
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(name)
 
 # If a user is "member", "administrator", or "creator", we can't restrict them if they're an admin or creator
 ALLOWED_STATUSES = ("member", "administrator", "creator")
@@ -62,12 +65,10 @@ ALLOWED_STATUSES = ("member", "administrator", "creator")
 # In-memory dict for group name requests
 pending_group_names = {}
 
-# ------------------- File Lock Mechanism -------------------
+------------------- File Lock Mechanism -------------------
 
 def acquire_lock():
-    """
-    Acquire an exclusive file lock so only one bot instance can run.
-    """
+    """ Acquire an exclusive file lock so only one bot instance can run. """
     try:
         lock_file = open(LOCK_FILE, 'w')
         fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -78,9 +79,7 @@ def acquire_lock():
         sys.exit("Another instance is already running.")
 
 def release_lock(lock_file):
-    """
-    Release the file lock upon exit.
-    """
+    """ Release the file lock upon exit. """
     try:
         fcntl.flock(lock_file, fcntl.LOCK_UN)
         lock_file.close()
@@ -93,7 +92,7 @@ lock_file = acquire_lock()
 import atexit
 atexit.register(release_lock, lock_file)
 
-# ------------------- DB Initialization -------------------
+------------------- DB Initialization -------------------
 
 def init_permissions_db():
     try:
@@ -171,15 +170,14 @@ def init_db():
         logger.error(f"Failed to initialize DB: {e}")
         raise
 
-# ------------------- DB Helpers -------------------
+------------------- DB Helpers -------------------
 
 def add_group(group_id):
     try:
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
         c.execute("""
-            INSERT OR IGNORE INTO groups (group_id, group_name)
-            VALUES (?, ?)
+            INSERT OR IGNORE INTO groups (group_id, group_name) VALUES (?, ?)
         """, (group_id, None))
         conn.commit()
         conn.close()
@@ -259,8 +257,7 @@ def enable_deletion(group_id):
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
         c.execute("""
-            INSERT INTO deletion_settings (group_id, enabled)
-            VALUES (?, 1)
+            INSERT INTO deletion_settings (group_id, enabled) VALUES (?, 1)
             ON CONFLICT(group_id) DO UPDATE SET enabled=1
         """, (group_id,))
         conn.commit()
@@ -275,8 +272,7 @@ def disable_deletion(group_id):
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()
         c.execute("""
-            INSERT INTO deletion_settings (group_id, enabled)
-            VALUES (?, 0)
+            INSERT INTO deletion_settings (group_id, enabled) VALUES (?, 0)
             ON CONFLICT(group_id) DO UPDATE SET enabled=0
         """, (group_id,))
         conn.commit()
@@ -307,7 +303,7 @@ def revoke_user_permissions(user_id):
         conn.close()
         logger.info(f"Revoked permissions for user {user_id} (role='removed').")
     except Exception as e:
-        logger.error(f"Error revoking perms for {user_id}: {e}")
+        logger.error(f"Error revoking perms for user {user_id}: {e}")
         raise
 
 def remove_user_from_removed_users(group_id, user_id):
@@ -334,17 +330,13 @@ def list_removed_users(group_id=None):
         c = conn.cursor()
         if group_id is None:
             c.execute("""
-                SELECT group_id, user_id, removal_reason, removal_time
-                FROM removed_users
+                SELECT group_id, user_id, removal_reason, removal_time FROM removed_users
             """)
-            rows = c.fetchall()
         else:
             c.execute("""
-                SELECT user_id, removal_reason, removal_time
-                FROM removed_users
-                WHERE group_id=?
+                SELECT user_id, removal_reason, removal_time FROM removed_users WHERE group_id=?
             """, (group_id,))
-            rows = c.fetchall()
+        rows = c.fetchall()
         conn.close()
         logger.info("Fetched removed_users entries.")
         return rows
@@ -354,7 +346,7 @@ def list_removed_users(group_id=None):
 
 delete_all_messages_after_removal = {}
 
-# ------------------- Command Handlers -------------------
+------------------- Command Handlers -------------------
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -383,13 +375,14 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/rmove_user <group_id> <user_id>` – Force remove user from group.\n"
         "• `/mute <group_id> <user_id> <minutes>` – Mute user.\n"
         "• `/unmute <group_id> <user_id>` – Remove mute from user.\n"
-        "• `/limit <group_id> <user_id> <permission_type> <on/off>` – Toggle user permission.\n"
+        "• `/limit <group_id> <user_id> <permission_type> <on/off>` – Toggle permission.\n"
         "• `/slow <group_id> <seconds>` – Placeholder for slow mode.\n"
         "• `/be_sad <group_id>` – Enable Arabic deletion.\n"
         "• `/be_happy <group_id>` – Disable Arabic deletion.\n"
         "• `/check <group_id>` – Validate 'Removed Users' vs actual membership.\n"
         "• `/link <group_id>` – Create one-time invite link.\n"
         "• `/permission_type` – Show valid `<permission_type>` for `/limit`.\n"
+        "• `/get_id` – Send this group's chat ID to you.\n"
         "\n"
         "*Note:* The bot must be *admin* with 'can_restrict_members' to effectively mute/limit.\n"
     )
@@ -545,9 +538,7 @@ async def unbypass_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(wr, version=2), parse_mode='MarkdownV2')
 
 async def love_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /love <group_id> <user_id>
-    """
+    """ /love <group_id> <user_id> """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
@@ -585,9 +576,7 @@ async def love_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(chat_id=user.id, text=escape_markdown(cf, version=2), parse_mode='MarkdownV2')
 
 async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /rmove_user <group_id> <user_id>
-    """
+    """ /rmove_user <group_id> <user_id> """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
@@ -626,11 +615,8 @@ async def rmove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cf = f"✅ Removed `{u_id}` from group `{g_id}`.\nMessages for next {MESSAGE_DELETE_TIMEFRAME}s will be deleted."
     await context.bot.send_message(chat_id=user.id, text=escape_markdown(cf, version=2), parse_mode='MarkdownV2')
 
-# MUTE:
 async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /mute <group_id> <user_id> <minutes>
-    """
+    """ /mute <group_id> <user_id> <minutes> """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
@@ -667,11 +653,8 @@ async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         err = "⚠️ Could not mute. Bot must be admin with can_restrict_members."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
 
-# UNMUTE:
 async def unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /unmute <group_id> <user_id> – remove the user's mute (allow sending messages again)
-    """
+    """ /unmute <group_id> <user_id> – remove the user's mute (allow sending messages again) """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
@@ -712,33 +695,17 @@ async def unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         err = "⚠️ Could not unmute. Bot must be admin with can_restrict_members."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
 
-# -------------- Permission Types for /limit --------------
 VALID_PERMISSION_TYPES = [
-    "text",
-    "photos",
-    "videos",
-    "files",
-    "music",
-    "gifs",
-    "voice",
-    "video_messages",
-    "inlinebots",
-    "embed_links",
-    "polls",
-    "stickers",
-    "games"
+    "text", "photos", "videos", "files", "music", "gifs", "voice",
+    "video_messages", "inlinebots", "embed_links", "polls", "stickers", "games"
 ]
 
 async def limit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /limit <group_id> <user_id> <permission_type> <on/off>
-    toggles a specific permission for normal members
-    """
+    """ /limit <group_id> <user_id> <permission_type> <on/off> toggles a specific permission """
     user = update.effective_user
     if user.id != ALLOWED_USER_ID:
         return
 
-    # parse arguments
     if len(context.args) != 4:
         msg = (
             "⚠️ Usage: `/limit <group_id> <user_id> <permission_type> <on/off>`\n"
@@ -758,13 +725,11 @@ async def limit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(wr, version=2), parse_mode='MarkdownV2')
         return
 
-    # check if group is registered
     if not group_exists(g_id):
         w = f"⚠️ Group `{g_id}` not registered."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(w, version=2), parse_mode='MarkdownV2')
         return
 
-    # optional: check if group is supergroup
     try:
         chat_info = await context.bot.get_chat(g_id)
         if chat_info.type != "supergroup":
@@ -774,10 +739,8 @@ async def limit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error get_chat for group {g_id}: {e}")
         pass
 
-    # check the user status
     try:
         target_member = await context.bot.get_chat_member(chat_id=g_id, user_id=u_id)
-        # If user is admin or creator, we can't restrict them
         if target_member.status in ["administrator", "creator"]:
             wr = (
                 f"⚠️ Cannot restrict user `{u_id}` because they're an admin/creator.\n"
@@ -791,7 +754,6 @@ async def limit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(wr, version=2), parse_mode='MarkdownV2')
         return
 
-    # Build permissions
     def off():
         return toggle == "off"
 
@@ -829,7 +791,6 @@ async def limit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         can_add_web_page_previews=True
     )
 
-    # Attempt to apply
     try:
         await context.bot.restrict_chat_member(chat_id=g_id, user_id=u_id, permissions=perms)
         msg = (
@@ -889,14 +850,27 @@ async def permission_type_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
         "This disallows that user from sending **photos** in the group.\n\n"
         "Remember: The bot must be an admin with can_restrict_members for this to work."
     )
-
     await context.bot.send_message(
         chat_id=user.id,
         text=escape_markdown(message, version=2),
         parse_mode='MarkdownV2'
     )
 
-# ------------------- Deletion / Filtering Handlers -------------------
+# New /get_id command handler
+async def get_id_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ALLOWED_USER_ID:
+        return
+    chat = update.effective_chat
+    chat_id = chat.id
+    # Send the chat ID back to the admin in a private message
+    await context.bot.send_message(
+        chat_id=user.id,
+        text=escape_markdown(f"`{chat_id}`", version=2),
+        parse_mode='MarkdownV2'
+    )
+
+------------------- Deletion / Filtering Handlers -------------------
 
 def has_arabic(text):
     return bool(re.search(r'[\u0600-\u06FF]', text))
@@ -1002,7 +976,7 @@ async def remove_deletion_flag_after_timeout(group_id):
         delete_all_messages_after_removal.pop(group_id, None)
         logger.info(f"Deletion flag removed for group {group_id}")
 
-# ------------------- /be_sad & /be_happy & /check & /link Commands -------------------
+------------------- /be_sad & /be_happy & /check & /link Commands -------------------
 
 async def be_sad_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1166,7 +1140,7 @@ async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         err = "⚠️ Could not create invite link. Check bot admin rights & logs."
         await context.bot.send_message(chat_id=user.id, text=escape_markdown(err, version=2), parse_mode='MarkdownV2')
 
-# ------------------- main() -------------------
+------------------- main() -------------------
 
 def main():
     try:
@@ -1199,7 +1173,7 @@ def main():
     app.add_handler(CommandHandler("love", love_cmd))
     app.add_handler(CommandHandler("rmove_user", rmove_user_cmd))
     app.add_handler(CommandHandler("mute", mute_cmd))
-    app.add_handler(CommandHandler("unmute", unmute_cmd))  # New
+    app.add_handler(CommandHandler("unmute", unmute_cmd))
     app.add_handler(CommandHandler("limit", limit_cmd))
     app.add_handler(CommandHandler("slow", slow_cmd))
     app.add_handler(CommandHandler("be_sad", be_sad_cmd))
@@ -1207,6 +1181,7 @@ def main():
     app.add_handler(CommandHandler("check", check_cmd))
     app.add_handler(CommandHandler("link", link_cmd))
     app.add_handler(CommandHandler("permission_type", permission_type_cmd))
+    app.add_handler(CommandHandler("get_id", get_id_cmd))  # New /get_id handler
 
     # Message handlers
     app.add_handler(MessageHandler(
@@ -1224,7 +1199,7 @@ def main():
 
     app.add_error_handler(error_handler)
 
-    logger.info("Bot starting with improved /limit checks & /unmute command.")
+    logger.info("Bot starting with improved /limit checks, /unmute command, and /get_id added.")
     app.run_polling()
 
 if __name__ == "__main__":
