@@ -367,6 +367,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /bypass <user_id> – Add a user to bypass list.\n"
         "• /unbypass <user_id> – Remove a user from bypass list.\n"
         "• /love <group_id> <user_id> – Remove a user from 'Removed Users'.\n"
+        "• /back_group <group_id> <user_id> – Remove a user from 'Removed Users' without banning.\n"
         "• /rmove_user <group_id> <user_id> – Force remove user from group.\n"
         "• /mute <group_id> <user_id> <minutes> – Mute user.\n"
         "• /unmute <group_id> <user_id> – Remove mute from user.\n"
@@ -460,6 +461,52 @@ async def get_id_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text=escape_markdown(str(chat_id), version=2),
         parse_mode='MarkdownV2'
     )
+
+# New /back_group command
+async def back_group_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ /back_group <group_id> <user_id> – Remove a user from 'Removed Users' list """
+    user = update.effective_user
+    if user.id != ALLOWED_USER_ID:
+        return
+    if len(context.args) != 2:
+        msg = "⚠️ Usage: /back_group <group_id> <user_id>"
+        return await context.bot.send_message(
+            chat_id=user.id,
+            text=escape_markdown(msg, version=2),
+            parse_mode='MarkdownV2'
+        )
+    try:
+        g_id = int(context.args[0])
+        u_id = int(context.args[1])
+    except ValueError:
+        err = "⚠️ Both group_id and user_id must be integers."
+        return await context.bot.send_message(
+            chat_id=user.id,
+            text=escape_markdown(err, version=2),
+            parse_mode='MarkdownV2'
+        )
+    if not group_exists(g_id):
+        wr = f"⚠️ Group {g_id} is not registered."
+        return await context.bot.send_message(
+            chat_id=user.id,
+            text=escape_markdown(wr, version=2),
+            parse_mode='MarkdownV2'
+        )
+    removed = remove_user_from_removed_users(g_id, u_id)
+    if removed:
+        cf = f"✅ User {u_id} removed from 'Removed Users' list for group {g_id}."
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=escape_markdown(cf, version=2),
+            parse_mode='MarkdownV2'
+        )
+    else:
+        wr = f"⚠️ User {u_id} not found in 'Removed Users' for group {g_id}."
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=escape_markdown(wr, version=2),
+            parse_mode='MarkdownV2'
+        )
 
 async def rmove_group_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1095,11 +1142,7 @@ async def be_happy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error disabling deletion for {g_id}: {e}")
         err = "⚠️ Could not disable. Check logs."
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=escape_markdown(err, version=2),
-            parse_mode='MarkdownV2'
-        )
+        await context.bot.send_message( chat_id=user.id, text=escape_markdown(err,version=2), parse_mode='MarkdownV2')
 
 async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1261,6 +1304,7 @@ def main():
     app.add_handler(CommandHandler("bypass", bypass_cmd))
     app.add_handler(CommandHandler("unbypass", unbypass_cmd))
     app.add_handler(CommandHandler("love", love_cmd))
+    app.add_handler(CommandHandler("back_group", back_group_cmd))
     app.add_handler(CommandHandler("rmove_user", rmove_user_cmd))
     app.add_handler(CommandHandler("mute", mute_cmd))
     app.add_handler(CommandHandler("unmute", unmute_cmd))
