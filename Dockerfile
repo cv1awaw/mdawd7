@@ -26,6 +26,5 @@ RUN pip install --upgrade pip \
 # Now copy in your entire bot code (unchanged)
 COPY . .
 
-# When the container starts, run your bot:
-# (replace bot.py with whatever your script is named)
-CMD ["python", "bot.py"]
+# عند تشغيل الحاوية، شغل main.py
+CMD ["python", "main.py"]
